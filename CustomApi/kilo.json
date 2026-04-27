@@ -1,0 +1,28 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+
+  "enabled_providers": ["kilocode", "opencode", "openrouter"],
+
+  "model": "openrouter/free",
+
+  "provider": {
+    "kilocode": {
+      "options": {
+        "baseURL": "https://api.kilo.ai/api/openrouter/v1",
+        "apiKey": "${env:KILOCODE_API_KEY}"
+      }
+    },
+    "opencode": {
+      "options": {
+        "baseURL": "https://api.opencode.so/v1",
+        "apiKey": "${env:OPENCODE_API_KEY}"
+      }
+    },
+    "openrouter": {
+      "options": {
+        "baseURL": "https://openrouter.ai/api/v1",
+        "apiKey": "${env:OPENROUTER_API_KEY}"
+      }
+    }
+  }
+}

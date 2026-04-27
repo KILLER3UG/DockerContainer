@@ -1,0 +1,42 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - heading "Claudish Proxy" [level=1] [ref=e4]
+    - generic [ref=e9]: Running
+  - generic [ref=e10]:
+    - generic [ref=e11]:
+      - paragraph [ref=e12]: Claude Model
+      - paragraph [ref=e13]: minimax-m2.5-free
+      - paragraph [ref=e14]: Opencode
+      - paragraph [ref=e15]: 250.0K ctx
+    - generic [ref=e16]:
+      - paragraph [ref=e17]: Codex Model
+      - paragraph [ref=e18]: inclusionai/ling-2.6-1t:free
+      - paragraph [ref=e19]: Kilocode
+      - paragraph [ref=e20]: 250.0K ctx
+    - generic [ref=e21]:
+      - paragraph [ref=e22]: Pending Requests
+      - paragraph [ref=e23]: "0"
+    - generic [ref=e24]:
+      - paragraph [ref=e25]: Total Requests
+      - paragraph [ref=e26]: "0"
+  - generic [ref=e27]:
+    - generic [ref=e28]:
+      - generic [ref=e29]:
+        - heading "Active Clients" [level=2] [ref=e30]
+        - generic [ref=e33]
+      - generic [ref=e46]:
+        - generic [ref=e47]
+        - generic [ref=e50]
+        - generic [ref=e95]
+        - generic [ref=e121]
+        - generic [ref=e130]
+    - generic [ref=e133]:
+      - generic [ref=e134]:
+        - generic [ref=e135]
+        - table [ref=e141]
+      - generic [ref=e153]:
+        - heading "Live File Activity" [level=2] [ref=e154]
+        - generic [ref=e156]: Waiting for model activity...
+      - generic [ref=e157]:
+        - generic [ref=e158]
+        - generic [ref=e164]: Requests will appear here...

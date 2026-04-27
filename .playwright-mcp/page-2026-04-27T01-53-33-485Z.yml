@@ -1,0 +1,172 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - heading "Claudish Proxy" [level=1] [ref=e4]
+    - generic [ref=e9]: Running
+  - generic [ref=e10]:
+    - generic [ref=e11]:
+      - paragraph [ref=e12]: Claude Model
+      - paragraph [ref=e13]: minimax-m2.5-free
+      - paragraph [ref=e14]: Opencode
+      - paragraph [ref=e15]: 250.0K ctx
+    - generic [ref=e16]:
+      - paragraph [ref=e17]: Codex Model
+      - paragraph [ref=e18]: inclusionai/ling-2.6-1t:free
+      - paragraph [ref=e19]: Kilocode
+      - paragraph [ref=e20]: 250.0K ctx
+    - generic [ref=e21]:
+      - paragraph [ref=e22]: Pending Requests
+      - paragraph [ref=e23]: "0"
+    - generic [ref=e24]:
+      - paragraph [ref=e25]: Total Requests
+      - paragraph [ref=e26]: "0"
+  - generic [ref=e27]:
+    - generic [ref=e28]:
+      - generic [ref=e29]:
+        - heading "Active Clients" [level=2] [ref=e30]:
+          - img [ref=e31]
+          - text: Active Clients
+        - generic [ref=e33]:
+          - generic [ref=e34]:
+            - generic [ref=e35]: ðŸ¤–
+            - paragraph [ref=e36]: Claude
+            - paragraph [ref=e37]: /v1/messages
+            - generic [ref=e38]: Inactive
+            - paragraph [ref=e39]: "--"
+          - generic [ref=e40]:
+            - generic [ref=e41]: ðŸ’»
+            - paragraph [ref=e42]: Codex
+            - paragraph [ref=e43]: /v1/chat/completions
+            - generic [ref=e44]: Inactive
+            - paragraph [ref=e45]: "--"
+      - generic [ref=e46]:
+        - generic [ref=e47]:
+          - heading "Provider Profiles" [level=2] [ref=e48]
+          - button "ðŸ”„ Refresh Models" [ref=e49] [cursor=pointer]
+        - generic [ref=e50]:
+          - generic [ref=e51]:
+            - heading "ðŸ¤– Claude Profile" [level=3] [ref=e52]:
+              - generic [ref=e53]: ðŸ¤–
+              - text: Claude Profile
+            - generic [ref=e54]:
+              - generic [ref=e55]:
+                - generic [ref=e56]: Model
+                - combobox [ref=e57]:
+                  - option "minimax-m2.5-free" [selected]
+                  - option "Fetching live models..."
+              - generic [ref=e58]:
+                - generic [ref=e59]: Target URL
+                - textbox [ref=e60]: https://opencode.ai/zen/v1/chat/completions
+              - generic [ref=e61]:
+                - generic [ref=e62]: API Key
+                - textbox [ref=e63]: sk-SdUrgeLcJ1PYExd37NcMzjWR6wwxUXncWrcUkWaumJNBDhQ37OZFQBrQUzMpldDI
+              - generic [ref=e64]:
+                - generic [ref=e65]: Context Window
+                - generic [ref=e66]:
+                  - textbox "Auto-detected" [ref=e67]: 250.0K tokens
+                  - button "ðŸ”„" [ref=e68] [cursor=pointer]
+                - paragraph [ref=e69]: Auto-detected from model ID. Override in config if needed.
+              - generic [ref=e70]:
+                - button "Save" [ref=e71] [cursor=pointer]
+                - button "Test" [ref=e72] [cursor=pointer]
+          - generic [ref=e73]:
+            - heading "ðŸ’» Codex Profile" [level=3] [ref=e74]:
+              - generic [ref=e75]: ðŸ’»
+              - text: Codex Profile
+            - generic [ref=e76]:
+              - generic [ref=e77]:
+                - generic [ref=e78]: Model
+                - combobox [ref=e79]:
+                  - option "inclusionai/ling-2.6-1t:free" [selected]
+                  - option "Fetching live models..."
+              - generic [ref=e80]:
+                - generic [ref=e81]: Target URL
+                - textbox [ref=e82]: https://api.kilo.ai/api/gateway/chat/completions
+              - generic [ref=e83]:
+                - generic [ref=e84]: API Key
+                - textbox [ref=e85]: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbnYiOiJwcm9kdWN0aW9uIiwia2lsb1VzZXJJZCI6IjNlNjA2YmUzLTI1ZGUtNDIxYi04N2VhLWZmYjZjMmY0YTcwNyIsImFwaVRva2VuUGVwcGVyIjoiODRhNjVlZmYtNGM0ZS00NTU1LWI0ZWYtNDNkMzE3Mzg0ZGFlIiwidmVyc2lvbiI6MywiaWF0IjoxNzc3MTA3NTIyLCJleHAiOjE5MzQ3ODc1MjJ9.MMCp6xRUgo_bKAURXMvkXOx1OgffymXRhx7VoQlcYWI
+              - generic [ref=e86]:
+                - generic [ref=e87]: Context Window
+                - generic [ref=e88]:
+                  - textbox "Auto-detected" [ref=e89]: 250.0K tokens
+                  - button "ðŸ”„" [ref=e90] [cursor=pointer]
+                - paragraph [ref=e91]: Auto-detected from model ID. Override in config if needed.
+              - generic [ref=e92]:
+                - button "Save" [ref=e93] [cursor=pointer]
+                - button "Test" [ref=e94] [cursor=pointer]
+        - generic [ref=e95]:
+          - heading "Custom Provider" [level=3] [ref=e96]:
+            - img [ref=e97]
+            - text: Custom Provider
+          - generic [ref=e99]:
+            - generic [ref=e100]:
+              - generic [ref=e101]: API Base URL
+              - textbox "https://api.example.com/v1" [ref=e102]
+            - generic [ref=e103]:
+              - generic [ref=e104]: API Key
+              - textbox "sk-..." [ref=e105]
+            - generic [ref=e106]:
+              - 'button "ðŸ” Fetch Models" [ref=e107] [cursor=pointer]'
+              - button "ðŸ§ª Test" [ref=e108] [cursor=pointer]
+            - generic [ref=e109]:
+              - generic [ref=e110]: Model
+              - combobox [ref=e111]:
+                - option "Enter URL & key, then click Fetch Models" [selected]
+            - generic [ref=e112]:
+              - button "Apply to Claude" [ref=e113] [cursor=pointer]
+              - button "Apply to Codex" [ref=e114] [cursor=pointer]
+        - generic [ref=e115]:
+          - heading "Cline / Agent Configuration" [level=3] [ref=e116]:
+            - img [ref=e117]
+            - text: Cline / Agent Configuration
+          - generic [ref=e120]:
+            - paragraph [ref=e121]: API Base URL
+            - code [ref=e122] [cursor=pointer]: loading...
+            - paragraph [ref=e123]: "Note: Set provider to 'OpenAI Compatible' in Cline settings."
+        - generic [ref=e124]:
+          - heading "Current Active Config:" [level=3] [ref=e125]
+          - generic [ref=e126]:
+            - text: "{"
+            - text: "\"claude\": {"
+            - text: "\"currentModel\": \"minimax-m2.5-free\","
+            - text: "\"targetUrl\": \"https://opencode.ai/zen/v1/chat/completions\","
+            - text: "\"apiKey\": \"sk-SdUrgeLcJ1PYExd37NcMzjWR6wwxUXncWrcUkWaumJNBDhQ37OZFQBrQUzMpldDI\","
+            - text: "\"contextWindow\": 256000,"
+            - text: "\"contextModelId\": \"minimax-m2.5-free\""
+            - text: "},"
+            - text: "\"codex\": {"
+            - text: "\"currentModel\": \"inclusionai/ling-2.6-1t:free\","
+            - text: "\"targetUrl\": \"https://api.kilo.ai/api/gateway/chat/completions\","
+            - text: "\"apiKey\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbnYiOiJwcm9kdWN0aW9uIiwia2lsb1VzZXJJZCI6IjNlNjA2YmUzLTI1ZGUtNDIxYi04N2VhLWZmYjZjMmY0YTcwNyIsImFwaVRva2VuUGVwcGVyIjoiODRhNjVlZmYtNGM0ZS00NTU1LWI0ZWYtNDNkMzE3Mzg0ZGFlIiwidmVyc2lvbiI6MywiaWF0IjoxNzc3MTA3NTIyLCJleHAiOjE5MzQ3ODc1MjJ9.MMCp6xRUgo_bKAURXMvkXOx1OgffymXRhx7VoQlcYWI\","
+            - text: "\"contextWindow\": 256000,"
+            - text: "\"contextModelId\": \"inclusionai/ling-2.6-1t:free\""
+            - text: "}"
+            - text: "}"
+    - generic [ref=e127]:
+      - generic [ref=e128]:
+        - generic [ref=e129]:
+          - heading "Request Traffic" [level=2] [ref=e130]:
+            - img [ref=e131]
+            - text: Request Traffic
+          - generic [ref=e133]: Auto-refreshing
+        - table [ref=e135]:
+          - rowgroup [ref=e136]:
+            - row "Time Client Endpoint Model Duration Status" [ref=e137]:
+              - columnheader "Time" [ref=e138]
+              - columnheader "Client" [ref=e139]
+              - columnheader "Endpoint" [ref=e140]
+              - columnheader "Model" [ref=e141]
+              - columnheader "Duration" [ref=e142]
+              - columnheader "Status" [ref=e143]
+          - rowgroup [ref=e144]:
+            - row "No requests yet" [ref=e145]:
+              - cell "No requests yet" [ref=e146]
+      - generic [ref=e147]:
+        - heading "Live File Activity" [level=2] [ref=e148]
+        - generic [ref=e150]: Waiting for model activity...
+      - generic [ref=e151]:
+        - generic [ref=e152]:
+          - heading "Request Inspector" [level=2] [ref=e153]:
+            - img [ref=e154]
+            - text: Request Inspector
+          - generic [ref=e156]: Click a request to expand
+        - generic [ref=e158]: Requests will appear here...

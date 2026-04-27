@@ -1,0 +1,995 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Claudish Proxy Control</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 min-h-screen p-4 md:p-8">
+    <div class="max-w-7xl mx-auto space-y-6">
+        <!-- Header -->
+        <div class="flex justify-between items-center">
+            <h1 class="text-3xl font-bold text-gray-800">Claudish Proxy</h1>
+            <div class="flex items-center gap-2">
+                <span class="relative flex h-3 w-3">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                    <span class="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                </span>
+                <span class="text-sm text-gray-600 font-medium">Running</span>
+            </div>
+        </div>
+
+        <!-- Status Cards -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div class="bg-white rounded-lg shadow-sm p-4 border-l-4 border-purple-500">
+                <p class="text-xs text-gray-500 uppercase font-bold">Claude Model</p>
+                <p id="claudeStatusModel" class="text-sm font-mono text-gray-800 truncate mt-1">loading...</p>
+                <p id="claudeStatusProvider" class="text-[10px] text-gray-400 truncate">--</p>
+                <p id="claudeStatusContext" class="text-[10px] text-emerald-600 font-medium mt-0.5">--</p>
+            </div>
+            <div class="bg-white rounded-lg shadow-sm p-4 border-l-4 border-blue-500">
+                <p class="text-xs text-gray-500 uppercase font-bold">Codex Model</p>
+                <p id="codexStatusModel" class="text-sm font-mono text-gray-800 truncate mt-1">loading...</p>
+                <p id="codexStatusProvider" class="text-[10px] text-gray-400 truncate">--</p>
+                <p id="codexStatusContext" class="text-[10px] text-emerald-600 font-medium mt-0.5">--</p>
+            </div>
+            <div class="bg-white rounded-lg shadow-sm p-4 border-l-4 border-amber-500">
+                <p class="text-xs text-gray-500 uppercase font-bold">Pending Requests</p>
+                <p id="statusPending" class="text-2xl font-bold text-gray-800 mt-1">0</p>
+            </div>
+            <div class="bg-white rounded-lg shadow-sm p-4 border-l-4 border-emerald-500">
+                <p class="text-xs text-gray-500 uppercase font-bold">Total Requests</p>
+                <p id="statusTotal" class="text-2xl font-bold text-gray-800 mt-1">0</p>
+            </div>
+        </div>
+
+        <div class="grid md:grid-cols-2 gap-6">
+            <!-- Left Column: Active Clients + Profile Settings -->
+            <div class="space-y-6">
+                <!-- Active Clients -->
+                <div class="bg-white rounded-lg shadow-md p-6">
+                    <h2 class="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
+                        <svg class="w-5 h-5 text-indigo-600" fill="currentColor" viewBox="0 0 20 20"><path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3zM6 8a2 2 0 11-4 0 2 2 0 014 0zM16 18v-3a5.972 5.972 0 00-.75-2.906A3.005 3.005 0 0119 15v3h-3zM4.75 12.094A5.973 5.973 0 004 15v3H1v-3a3 3 0 013.75-2.906z"></path></svg>
+                        Active Clients
+                    </h2>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div id="claudeCard" class="rounded-lg border-2 border-gray-200 p-4 text-center transition-all">
+                            <div class="text-2xl mb-1">🤖</div>
+                            <p class="font-bold text-gray-800">Claude</p>
+                            <p class="text-xs text-gray-500 mt-1">/v1/messages</p>
+                            <span id="claudeBadge" class="inline-block mt-2 px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-500">Inactive</span>
+                            <p id="claudeLast" class="text-[10px] text-gray-400 mt-1">--</p>
+                        </div>
+                        <div id="codexCard" class="rounded-lg border-2 border-gray-200 p-4 text-center transition-all">
+                            <div class="text-2xl mb-1">💻</div>
+                            <p class="font-bold text-gray-800">Codex</p>
+                            <p class="text-xs text-gray-500 mt-1">/v1/chat/completions</p>
+                            <span id="codexBadge" class="inline-block mt-2 px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-500">Inactive</span>
+                            <p id="codexLast" class="text-[10px] text-gray-400 mt-1">--</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Profile Settings -->
+                <div class="bg-white rounded-lg shadow-md p-6">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-lg font-bold text-gray-800">Provider Profiles</h2>
+                        <button onclick="loadModels()" class="text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded hover:bg-indigo-200">🔄 Refresh Models</button>
+                    </div>
+
+                    <div class="grid md:grid-cols-2 gap-4">
+                        <!-- Claude Profile -->
+                        <div class="border-2 border-purple-200 rounded-lg p-4 bg-purple-50/30">
+                            <h3 class="font-bold text-purple-700 mb-3 flex items-center gap-2">
+                                <span>🤖</span> Claude Profile
+                            </h3>
+                            <div class="space-y-3">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600">Model</label>
+                                    <select id="claudeModelSelect" onchange="onModelChange('claude')" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-sm">
+                                        <option value="">Select a model...</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600">Target URL</label>
+                                    <input type="text" id="claudeTargetUrl" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-xs">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600">API Key</label>
+                                    <input type="password" id="claudeApiKey" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-xs">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600">Context Window</label>
+                                    <div class="flex gap-2">
+                                        <input type="text" id="claudeContextWindow" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-xs bg-gray-50" placeholder="Auto-detected" readonly>
+                                        <button onclick="refreshContextWindow('claude')" class="mt-1 px-2 py-1 text-xs bg-gray-200 rounded hover:bg-gray-300" title="Refresh from model registry">🔄</button>
+                                    </div>
+                                    <p class="text-[10px] text-gray-400 mt-0.5">Auto-detected from model ID. Override in config if needed.</p>
+                                </div>
+                                <div class="flex gap-2 pt-1">
+                                    <button onclick="saveProfileConfig('claude')" class="flex-1 bg-purple-600 text-white text-xs px-3 py-2 rounded hover:bg-purple-700 transition">Save</button>
+                                    <button onclick="testProfileConfig('claude')" class="flex-1 bg-green-600 text-white text-xs px-3 py-2 rounded hover:bg-green-700 transition">Test</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Codex Profile -->
+                        <div class="border-2 border-blue-200 rounded-lg p-4 bg-blue-50/30">
+                            <h3 class="font-bold text-blue-700 mb-3 flex items-center gap-2">
+                                <span>💻</span> Codex Profile
+                            </h3>
+                            <div class="space-y-3">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600">Model</label>
+                                    <select id="codexModelSelect" onchange="onModelChange('codex')" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-sm">
+                                        <option value="">Select a model...</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600">Target URL</label>
+                                    <input type="text" id="codexTargetUrl" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-xs">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600">API Key</label>
+                                    <input type="password" id="codexApiKey" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-xs">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600">Context Window</label>
+                                    <div class="flex gap-2">
+                                        <input type="text" id="codexContextWindow" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-xs bg-gray-50" placeholder="Auto-detected" readonly>
+                                        <button onclick="refreshContextWindow('codex')" class="mt-1 px-2 py-1 text-xs bg-gray-200 rounded hover:bg-gray-300" title="Refresh from model registry">🔄</button>
+                                    </div>
+                                    <p class="text-[10px] text-gray-400 mt-0.5">Auto-detected from model ID. Override in config if needed.</p>
+                                </div>
+                                <div class="flex gap-2 pt-1">
+                                    <button onclick="saveProfileConfig('codex')" class="flex-1 bg-blue-600 text-white text-xs px-3 py-2 rounded hover:bg-blue-700 transition">Save</button>
+                                    <button onclick="testProfileConfig('codex')" class="flex-1 bg-green-600 text-white text-xs px-3 py-2 rounded hover:bg-green-700 transition">Test</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Custom Provider -->
+                    <div class="mt-6 p-4 bg-gradient-to-r from-emerald-50 to-teal-50 rounded-lg border border-emerald-200">
+                        <h3 class="text-sm font-bold text-emerald-700 mb-3 flex items-center gap-2">
+                            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd"></path></svg>
+                            Custom Provider
+                        </h3>
+                        <div class="space-y-3">
+                            <!-- Saved Providers -->
+                            <div>
+                                <label class="block text-xs font-medium text-gray-600 flex items-center gap-1">
+                                    ⭐ Saved Providers
+                                    <button onclick="saveCurrentBookmark()" class="ml-auto text-emerald-600 hover:text-emerald-800 text-xs font-bold" title="Save current provider">💾 Save</button>
+                                </label>
+                                <div class="flex gap-2 mt-1">
+                                    <select id="bookmarkSelect" onchange="selectBookmark(this.value)" class="flex-1 rounded-md border-gray-300 shadow-sm p-2 border text-xs">
+                                        <option value="">-- Select a saved provider --</option>
+                                    </select>
+                                    <button onclick="deleteSelectedBookmark()" class="bg-red-100 text-red-600 hover:bg-red-200 px-2 py-1 rounded text-xs" title="Delete selected">🗑️</button>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-600">API Base URL</label>
+                                <input type="text" id="customBaseUrl" placeholder="https://api.example.com/v1" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-xs">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-600">API Key</label>
+                                <input type="password" id="customApiKey" placeholder="sk-..." class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-xs">
+                            </div>
+                            <div class="flex gap-2">
+                                <button onclick="fetchCustomModels()" class="flex-1 bg-emerald-600 text-white text-xs px-3 py-2 rounded hover:bg-emerald-700 transition">🔍 Fetch Models</button>
+                                <button onclick="testCustomProvider()" class="flex-1 bg-teal-600 text-white text-xs px-3 py-2 rounded hover:bg-teal-700 transition">🧪 Test</button>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-600">Model</label>
+                                <select id="customModelSelect" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-sm">
+                                    <option value="">Enter URL & key, then click Fetch Models</option>
+                                </select>
+                            </div>
+                            <div class="flex gap-2 pt-1">
+                                <button onclick="applyCustomModel('claude')" class="flex-1 bg-purple-500 text-white text-xs px-3 py-2 rounded hover:bg-purple-600 transition">Apply to Claude</button>
+                                <button onclick="applyCustomModel('codex')" class="flex-1 bg-blue-500 text-white text-xs px-3 py-2 rounded hover:bg-blue-600 transition">Apply to Codex</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Cline Compatibility -->
+                    <div class="mt-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                        <h3 class="text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
+                            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M11 3a1 1 0 100 2h2.586l-6.293 6.293a1 1 0 101.414 1.414L15 6.414V9a1 1 0 102 0V4a1 1 0 00-1-1h-5z"></path><path d="M5 5a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-3a1 1 0 10-2 0v3H5V7h3a1 1 0 000-2H5z"></path></svg>
+                            Cline / Agent Configuration
+                        </h3>
+                        <div class="space-y-2">
+                            <p class="text-[10px] text-gray-500 uppercase font-bold">API Base URL</p>
+                            <code id="clineUrl" class="block bg-white p-2 rounded border text-xs text-indigo-600 break-all cursor-pointer hover:bg-indigo-50" title="Click to copy" onclick="copyToClipboard(this.innerText)">loading...</code>
+                            <p class="text-[10px] text-gray-500 mt-2 italic">Note: Set provider to 'OpenAI Compatible' in Cline settings.</p>
+                        </div>
+                    </div>
+
+                    <div id="status" class="hidden mt-4 p-4 rounded-md text-sm break-all"></div>
+                    
+                    <div class="mt-6 border-t pt-6">
+                        <h3 class="text-lg font-semibold mb-2">Current Active Config:</h3>
+                        <pre id="currentConfig" class="bg-gray-800 text-green-400 p-4 rounded text-xs overflow-x-auto"></pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Request Traffic + File Activity -->
+            <div class="space-y-6">
+                <!-- Request Traffic -->
+                <div class="bg-white rounded-lg shadow-md p-6">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-lg font-bold text-gray-800 flex items-center gap-2">
+                            <svg class="w-5 h-5 text-indigo-600" fill="currentColor" viewBox="0 0 20 20"><path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zM8 7a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zM14 4a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z"></path></svg>
+                            Request Traffic
+                        </h2>
+                        <span class="text-xs text-gray-400">Auto-refreshing</span>
+                    </div>
+
+                    <!-- Pending Requests -->
+                    <div id="pendingSection" class="hidden mb-4">
+                        <p class="text-xs font-bold text-amber-600 uppercase mb-2">Pending Requests</p>
+                        <div id="pendingList" class="space-y-2"></div>
+                    </div>
+
+                    <!-- Completed Requests Table -->
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left text-sm">
+                            <thead>
+                                <tr class="border-b border-gray-200">
+                                    <th class="pb-2 font-semibold text-gray-600 text-xs">Time</th>
+                                    <th class="pb-2 font-semibold text-gray-600 text-xs">Client</th>
+                                    <th class="pb-2 font-semibold text-gray-600 text-xs">Endpoint</th>
+                                    <th class="pb-2 font-semibold text-gray-600 text-xs">Model</th>
+                                    <th class="pb-2 font-semibold text-gray-600 text-xs">Duration</th>
+                                    <th class="pb-2 font-semibold text-gray-600 text-xs">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="requestTable">
+                                <tr>
+                                    <td colspan="6" class="py-4 text-center text-gray-400 text-sm">No requests yet</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Live File Activity -->
+                <div class="bg-white rounded-lg shadow-md p-6">
+                    <h2 class="text-lg font-bold mb-4 text-gray-800">Live File Activity</h2>
+                    <div id="activityList" class="space-y-2 h-[300px] overflow-y-auto pr-2">
+                        <div class="text-gray-400 text-sm italic">Waiting for model activity...</div>
+                    </div>
+                </div>
+
+                <!-- Request Inspector -->
+                <div class="bg-white rounded-lg shadow-md p-6">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-lg font-bold text-gray-800 flex items-center gap-2">
+                            <svg class="w-5 h-5 text-pink-600" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M3 5a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 15a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd"></path></svg>
+                            Request Inspector
+                        </h2>
+                        <span class="text-xs text-gray-400">Click a request to expand</span>
+                    </div>
+                    <div id="inspectorList" class="space-y-3">
+                        <div class="text-gray-400 text-sm italic">Requests will appear here...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let allModels = [];
+        let lastClaudeTime = 0;
+        let lastCodexTime = 0;
+        let claudeCount = 0;
+        let codexCount = 0;
+
+        async function loadModels() {
+            const selects = ['claudeModelSelect', 'codexModelSelect'];
+            selects.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.innerHTML = '<option value="">Fetching live models...</option>';
+            });
+            try {
+                console.log('[UI] Fetching models...');
+                const res = await fetch('/ui/models');
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                allModels = await res.json();
+                console.log('[UI] Fetched', allModels.length, 'models');
+                if (!Array.isArray(allModels)) throw new Error('Expected array, got ' + typeof allModels);
+                selects.forEach(id => populateSelect(id, allModels));
+                
+                const cfgRes = await fetch('/ui/config');
+                const cfg = await cfgRes.json();
+                applyConfigToUI(cfg);
+            } catch (e) {
+                console.error('[UI] Failed to load models:', e);
+                showStatus('Model fetch failed: ' + e.message, 'bg-red-100 text-red-800');
+                selects.forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) el.innerHTML = '<option value="">Error loading models</option>';
+                });
+            }
+        }
+
+        const FALLBACK_MODELS = [
+            { id: 'minimax/minimax-m2.5:free', name: '[OpenRouter] minimax/minimax-m2.5:free', provider: 'OpenRouter', url: 'https://openrouter.ai/api/v1/chat/completions', base: 'https://openrouter.ai/api/v1', key: '' },
+            { id: 'inclusionai/ling-2.6-1t:free', name: '[OpenRouter] inclusionai/ling-2.6-1t:free', provider: 'OpenRouter', url: 'https://openrouter.ai/api/v1/chat/completions', base: 'https://openrouter.ai/api/v1', key: '' },
+            { id: 'google/gemini-2.0-flash-exp:free', name: '[OpenRouter] google/gemini-2.0-flash-exp:free', provider: 'OpenRouter', url: 'https://openrouter.ai/api/v1/chat/completions', base: 'https://openrouter.ai/api/v1', key: '' },
+            { id: 'tencent/hy3-preview:free', name: '[OpenRouter] tencent/hy3-preview:free', provider: 'OpenRouter', url: 'https://openrouter.ai/api/v1/chat/completions', base: 'https://openrouter.ai/api/v1', key: '' },
+            { id: 'meta-llama/llama-3.3-70b-instruct:free', name: '[OpenRouter] meta-llama/llama-3.3-70b-instruct:free', provider: 'OpenRouter', url: 'https://openrouter.ai/api/v1/chat/completions', base: 'https://openrouter.ai/api/v1', key: '' },
+            { id: 'deepseek/deepseek-chat:free', name: '[OpenRouter] deepseek/deepseek-chat:free', provider: 'OpenRouter', url: 'https://openrouter.ai/api/v1/chat/completions', base: 'https://openrouter.ai/api/v1', key: '' },
+        ];
+
+        function populateSelect(id, models) {
+            const select = document.getElementById(id);
+            if (!select) return;
+            select.innerHTML = '';
+            const list = (models && models.length > 0) ? models : FALLBACK_MODELS;
+            if (list.length === 0) {
+                select.innerHTML = '<option value="">No free models found</option>';
+                return;
+            }
+            list.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.id;
+                opt.innerText = m.name;
+                opt.dataset.url = m.url;
+                opt.dataset.key = m.key;
+                opt.dataset.base = m.base;
+                opt.dataset.provider = m.provider;
+                select.appendChild(opt);
+            });
+        }
+
+        function applyConfigToUI(cfg) {
+            if (cfg.claude) {
+                setSelectValue('claudeModelSelect', cfg.claude.currentModel);
+                document.getElementById('claudeTargetUrl').value = cfg.claude.targetUrl || '';
+                document.getElementById('claudeApiKey').value = cfg.claude.apiKey || '';
+                document.getElementById('claudeStatusModel').innerText = cfg.claude.currentModel || 'unknown';
+                document.getElementById('claudeStatusProvider').innerText = extractProvider(cfg.claude.targetUrl);
+                document.getElementById('claudeContextWindow').value = cfg.claude.contextWindow ? formatTokenCount(cfg.claude.contextWindow) : 'Auto-detect';
+                document.getElementById('claudeStatusContext').innerText = cfg.claude.contextWindow ? formatTokenCount(cfg.claude.contextWindow) + ' ctx' : 'Auto-detect';
+            }
+            if (cfg.codex) {
+                setSelectValue('codexModelSelect', cfg.codex.currentModel);
+                document.getElementById('codexTargetUrl').value = cfg.codex.targetUrl || '';
+                document.getElementById('codexApiKey').value = cfg.codex.apiKey || '';
+                document.getElementById('codexStatusModel').innerText = cfg.codex.currentModel || 'unknown';
+                document.getElementById('codexStatusProvider').innerText = extractProvider(cfg.codex.targetUrl);
+                document.getElementById('codexContextWindow').value = cfg.codex.contextWindow ? formatTokenCount(cfg.codex.contextWindow) + ' tokens' : 'Auto-detect';
+                document.getElementById('codexStatusContext').innerText = cfg.codex.contextWindow ? formatTokenCount(cfg.codex.contextWindow) + ' ctx' : 'Auto-detect';
+            }
+            // Backward compatibility: old flat format
+            if (!cfg.claude && !cfg.codex && cfg.targetUrl) {
+                setSelectValue('claudeModelSelect', cfg.currentModel);
+                setSelectValue('codexModelSelect', cfg.currentModel);
+                document.getElementById('claudeTargetUrl').value = cfg.targetUrl;
+                document.getElementById('claudeApiKey').value = cfg.apiKey || '';
+                document.getElementById('codexTargetUrl').value = cfg.targetUrl;
+                document.getElementById('codexApiKey').value = cfg.apiKey || '';
+                document.getElementById('claudeStatusModel').innerText = cfg.currentModel || 'unknown';
+                document.getElementById('claudeStatusProvider').innerText = extractProvider(cfg.targetUrl);
+                document.getElementById('codexStatusModel').innerText = cfg.currentModel || 'unknown';
+                document.getElementById('codexStatusProvider').innerText = extractProvider(cfg.targetUrl);
+            }
+            // Restore custom provider if saved
+            if (cfg.customProvider) {
+                document.getElementById('customBaseUrl').value = cfg.customProvider.baseUrl || '';
+                document.getElementById('customApiKey').value = cfg.customProvider.apiKey || '';
+            }
+            loadBookmarks();
+            updateConfigDisplay(cfg);
+            updateClineInfo();
+            // Auto-detect context windows for currently selected models
+            if (cfg.claude && cfg.claude.currentModel) refreshContextWindow('claude');
+            if (cfg.codex && cfg.codex.currentModel) refreshContextWindow('codex');
+        }
+
+        function setSelectValue(id, value) {
+            const select = document.getElementById(id);
+            if (!select || !value) return;
+            // Check if the value exists in options
+            let found = false;
+            for (let i = 0; i < select.options.length; i++) {
+                if (select.options[i].value === value) {
+                    found = true;
+                    break;
+                }
+            }
+            if (found) {
+                select.value = value;
+            } else {
+                // Add a placeholder option for the current value
+                const opt = document.createElement('option');
+                opt.value = value;
+                opt.innerText = value;
+                select.insertBefore(opt, select.firstChild);
+                select.value = value;
+            }
+        }
+
+        function extractProvider(url) {
+            if (!url) return 'unknown';
+            try {
+                const host = new URL(url).hostname;
+                if (host.includes('kilo')) return 'Kilocode';
+                if (host.includes('opencode')) return 'Opencode';
+                if (host.includes('openrouter')) return 'OpenRouter';
+                if (host.includes('cline')) return 'Cline AI';
+                return host;
+            } catch { return 'unknown'; }
+        }
+
+        function updateClineInfo() {
+            const select = document.getElementById('codexModelSelect');
+            const opt = select.options[select.selectedIndex];
+            if (opt && opt.dataset.base) {
+                document.getElementById('clineUrl').innerText = opt.dataset.base;
+            }
+        }
+
+        async function loadActivity() {
+            try {
+                const res = await fetch('/ui/activity');
+                const data = await res.json();
+                const list = document.getElementById('activityList');
+                if (data.length === 0) return;
+                list.innerHTML = data.map(item => `
+                    <div class="p-2 border-b border-gray-100 flex items-start gap-3">
+                        <span class="text-[10px] text-gray-400 mt-1 font-mono">${item.time}</span>
+                        <div>
+                            <span class="text-xs font-bold ${item.type === 'READ' ? 'text-blue-600' : item.type === 'COMPACT' ? 'text-amber-600' : 'text-purple-600'} border px-1 rounded mr-2">${item.type}</span>
+                            <span class="text-sm font-mono break-all text-gray-700">${item.detail}</span>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (e) { }
+        }
+
+        async function loadRequests() {
+            try {
+                const res = await fetch('/ui/requests');
+                const data = await res.json();
+                
+                document.getElementById('statusPending').innerText = data.pending.length;
+                document.getElementById('statusTotal').innerText = data.completed.length;
+
+                const pendingSection = document.getElementById('pendingSection');
+                const pendingList = document.getElementById('pendingList');
+                if (data.pending.length > 0) {
+                    pendingSection.classList.remove('hidden');
+                    pendingList.innerHTML = data.pending.map(r => `
+                        <div class="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                            <span class="animate-pulse h-2 w-2 rounded-full bg-amber-500"></span>
+                            <span class="text-xs font-bold ${r.clientType === 'claude' ? 'text-purple-700' : 'text-blue-700'}">${r.clientType.toUpperCase()}</span>
+                            <span class="text-xs text-gray-600">${r.endpoint}</span>
+                            <span class="text-xs text-gray-400 ml-auto">${r.elapsedMs}ms</span>
+                        </div>
+                    `).join('');
+                } else {
+                    pendingSection.classList.add('hidden');
+                }
+
+                const tbody = document.getElementById('requestTable');
+                if (data.completed.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6" class="py-4 text-center text-gray-400 text-sm">No requests yet</td></tr>';
+                } else {
+                    tbody.innerHTML = data.completed.map(r => {
+                        const isClaude = r.clientType === 'claude';
+                        const badgeColor = isClaude ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700';
+                        const statusIcon = r.status === 'success' ? '✅' : '❌';
+                        const endpointShort = r.endpoint.replace('/v1/', '');
+                        const errorTooltip = r.error ? `title="${r.error.replace(/"/g, '&quot;')}"` : '';
+                        return `
+                            <tr class="border-b border-gray-100 hover:bg-gray-50" ${errorTooltip}>
+                                <td class="py-2 text-xs text-gray-500 font-mono">${r.time}</td>
+                                <td class="py-2"><span class="text-[10px] font-bold px-1.5 py-0.5 rounded ${badgeColor}">${r.clientType.toUpperCase()}</span></td>
+                                <td class="py-2 text-xs text-gray-600">${endpointShort}</td>
+                                <td class="py-2 text-xs text-gray-500 truncate max-w-[100px]" title="${r.model}">${r.model}</td>
+                                <td class="py-2 text-xs text-gray-500 font-mono">${r.durationMs}ms</td>
+                                <td class="py-2 text-xs">${statusIcon}</td>
+                            </tr>
+                        `;
+                    }).join('');
+                }
+
+                const now = Date.now();
+                data.completed.forEach(r => {
+                    const t = parseTime(r.time);
+                    if (r.clientType === 'claude') {
+                        if (t > lastClaudeTime) lastClaudeTime = t;
+                        claudeCount++;
+                    } else {
+                        if (t > lastCodexTime) lastCodexTime = t;
+                        codexCount++;
+                    }
+                });
+
+                updateClientCard('claude', lastClaudeTime, claudeCount);
+                updateClientCard('codex', lastCodexTime, codexCount);
+            } catch (e) { }
+        }
+
+        function parseTime(timeStr) {
+            const [h, m, s] = timeStr.split(':').map(Number);
+            const now = new Date();
+            return new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, s).getTime();
+        }
+
+        function updateClientCard(type, lastTime, count) {
+            const isActive = (Date.now() - lastTime) < 60000;
+            const card = document.getElementById(type + 'Card');
+            const badge = document.getElementById(type + 'Badge');
+            const last = document.getElementById(type + 'Last');
+
+            if (lastTime > 0) {
+                if (isActive) {
+                    card.classList.remove('border-gray-200');
+                    card.classList.add(type === 'claude' ? 'border-purple-400' : 'border-blue-400', 'bg-indigo-50/30');
+                    badge.className = 'inline-block mt-2 px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-bold';
+                    badge.innerText = 'Active';
+                } else {
+                    card.classList.remove('border-purple-400', 'border-blue-400', 'bg-indigo-50/30');
+                    card.classList.add('border-gray-200');
+                    badge.className = 'inline-block mt-2 px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-500';
+                    badge.innerText = 'Idle';
+                }
+                last.innerText = count + ' request' + (count !== 1 ? 's' : '') + ' total';
+            }
+        }
+
+        function onModelChange(profile) {
+            const select = document.getElementById(profile + 'ModelSelect');
+            const opt = select.options[select.selectedIndex];
+            if (opt && opt.dataset.url) {
+                document.getElementById(profile + 'TargetUrl').value = opt.dataset.url;
+                document.getElementById(profile + 'ApiKey').value = opt.dataset.key;
+                if (profile === 'codex') updateClineInfo();
+            }
+            // Auto-detect context window for the selected model
+            refreshContextWindow(profile);
+        }
+
+        async function refreshContextWindow(profile) {
+            const model = document.getElementById(profile + 'ModelSelect').value;
+            if (!model) return;
+            try {
+                const res = await fetch('/ui/context?model=' + encodeURIComponent(model));
+                const data = await res.json();
+                const display = formatTokenCount(data.inputTokens) + ' tokens';
+                document.getElementById(profile + 'ContextWindow').value = display;
+                document.getElementById(profile + 'StatusContext').innerText = formatTokenCount(data.inputTokens) + ' ctx';
+            } catch (e) {
+                document.getElementById(profile + 'ContextWindow').value = 'Auto-detect';
+            }
+        }
+
+        function formatTokenCount(n) {
+            if (!n) return '0';
+            if (n >= 1000000) return (n / 1048576).toFixed(1) + 'M';
+            if (n >= 1000) return (n / 1024).toFixed(1) + 'K';
+            return n.toString();
+        }
+
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text);
+            alert('Copied to clipboard!');
+        }
+
+        async function saveProfileConfig(profile) {
+            const data = {
+                profile: profile,
+                currentModel: document.getElementById(profile + 'ModelSelect').value,
+                targetUrl: document.getElementById(profile + 'TargetUrl').value,
+                apiKey: document.getElementById(profile + 'ApiKey').value
+            };
+            // Also save custom provider settings to config root
+            const customBaseUrl = document.getElementById('customBaseUrl').value;
+            const customApiKey = document.getElementById('customApiKey').value;
+            if (customBaseUrl) {
+                data.customProvider = {
+                    baseUrl: customBaseUrl,
+                    apiKey: customApiKey
+                };
+            }
+            const res = await fetch('/ui/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            if (res.ok) {
+                showStatus(profile.toUpperCase() + ' profile saved!', 'bg-green-100 text-green-800');
+                document.getElementById(profile + 'StatusModel').innerText = data.currentModel;
+                document.getElementById(profile + 'StatusProvider').innerText = extractProvider(data.targetUrl);
+            }
+        }
+
+        async function testProfileConfig(profile) {
+            const btn = event.target;
+            const originalText = btn.innerText;
+            btn.innerText = 'Testing...';
+            btn.disabled = true;
+            const data = {
+                model: document.getElementById(profile + 'ModelSelect').value,
+                targetUrl: document.getElementById(profile + 'TargetUrl').value,
+                apiKey: document.getElementById(profile + 'ApiKey').value
+            };
+            try {
+                const res = await fetch('/ui/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                const result = await res.json();
+                if (result.success) {
+                    showStatus(profile.toUpperCase() + ' TEST SUCCESS: ' + result.content, 'bg-green-100 text-green-800');
+                } else {
+                    showStatus(profile.toUpperCase() + ' TEST FAILED: ' + result.error, 'bg-red-100 text-red-800');
+                }
+            } catch (e) {
+                showStatus('Error: ' + e.message, 'bg-red-100 text-red-800');
+            } finally {
+                btn.innerText = originalText;
+                btn.disabled = false;
+            }
+        }
+
+        function showStatus(text, classes) {
+            const el = document.getElementById('status');
+            el.className = 'mt-4 p-4 rounded-md ' + classes;
+            el.innerText = text;
+            el.classList.remove('hidden');
+        }
+
+        function updateConfigDisplay(cfg) {
+            document.getElementById('currentConfig').innerText = JSON.stringify(cfg, null, 2);
+        }
+
+        // ── Bookmarked Providers ──
+        let bookmarkList = [];
+
+        async function loadBookmarks() {
+            try {
+                const res = await fetch('/ui/bookmarks');
+                bookmarkList = await res.json();
+                const select = document.getElementById('bookmarkSelect');
+                select.innerHTML = '<option value="">-- Select a saved provider --</option>';
+                bookmarkList.forEach(b => {
+                    const opt = document.createElement('option');
+                    opt.value = b.name;
+                    opt.innerText = b.name;
+                    select.appendChild(opt);
+                });
+            } catch (e) {
+                console.error('Failed to load bookmarks:', e);
+            }
+        }
+
+        function selectBookmark(name) {
+            const bookmark = bookmarkList.find(b => b.name === name);
+            if (bookmark) {
+                document.getElementById('customBaseUrl').value = bookmark.baseUrl || '';
+                document.getElementById('customApiKey').value = bookmark.apiKey || '';
+                // Clear model select since we haven't fetched for this bookmark yet
+                document.getElementById('customModelSelect').innerHTML = '<option value="">Click Fetch Models to load</option>';
+                showStatus(`Loaded bookmark: ${bookmark.name}`, 'bg-blue-100 text-blue-800');
+            }
+        }
+
+        async function saveCurrentBookmark() {
+            const baseUrl = document.getElementById('customBaseUrl').value.trim();
+            const apiKey = document.getElementById('customApiKey').value.trim();
+            if (!baseUrl) {
+                showStatus('Enter a base URL first', 'bg-red-100 text-red-800');
+                return;
+            }
+            const name = prompt('Name this provider bookmark:', extractProvider(baseUrl) || 'My Provider');
+            if (!name) return;
+            try {
+                const res = await fetch('/ui/bookmarks', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, baseUrl, apiKey })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    bookmarkList = data.bookmarks;
+                    loadBookmarks();
+                    // Select the newly saved bookmark
+                    setTimeout(() => {
+                        document.getElementById('bookmarkSelect').value = name;
+                    }, 100);
+                    showStatus(`Bookmark "${name}" saved!`, 'bg-green-100 text-green-800');
+                } else {
+                    showStatus(data.error || 'Failed to save', 'bg-red-100 text-red-800');
+                }
+            } catch (e) {
+                showStatus('Error saving bookmark: ' + e.message, 'bg-red-100 text-red-800');
+            }
+        }
+
+        async function deleteSelectedBookmark() {
+            const select = document.getElementById('bookmarkSelect');
+            const name = select.value;
+            if (!name) {
+                showStatus('Select a bookmark to delete', 'bg-yellow-100 text-yellow-800');
+                return;
+            }
+            if (!confirm(`Delete bookmark "${name}"?`)) return;
+            try {
+                const res = await fetch('/ui/bookmarks/' + encodeURIComponent(name), { method: 'DELETE' });
+                const data = await res.json();
+                if (data.success) {
+                    bookmarkList = data.bookmarks;
+                    loadBookmarks();
+                    select.value = '';
+                    showStatus(`Bookmark "${name}" deleted`, 'bg-green-100 text-green-800');
+                } else {
+                    showStatus('Failed to delete', 'bg-red-100 text-red-800');
+                }
+            } catch (e) {
+                showStatus('Error deleting bookmark: ' + e.message, 'bg-red-100 text-red-800');
+            }
+        }
+
+        // ── Custom Provider ──
+        async function fetchCustomModels() {
+            const btn = event.target;
+            const originalText = btn.innerText;
+            btn.innerText = 'Fetching...';
+            btn.disabled = true;
+            const baseUrl = document.getElementById('customBaseUrl').value.trim();
+            const apiKey = document.getElementById('customApiKey').value.trim();
+            if (!baseUrl) {
+                showStatus('Please enter a base URL', 'bg-red-100 text-red-800');
+                btn.innerText = originalText;
+                btn.disabled = false;
+                return;
+            }
+            try {
+                const res = await fetch('/ui/custom-models', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ baseUrl, apiKey })
+                });
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+                const select = document.getElementById('customModelSelect');
+                select.innerHTML = '';
+                if (data.length === 0) {
+                    select.innerHTML = '<option value="">No models found</option>';
+                    showStatus('No models found at this provider', 'bg-yellow-100 text-yellow-800');
+                } else {
+                    data.forEach(m => {
+                        const opt = document.createElement('option');
+                        opt.value = m.id;
+                        opt.innerText = m.name;
+                        opt.dataset.url = m.url;
+                        opt.dataset.key = m.key;
+                        opt.dataset.base = m.base;
+                        opt.dataset.provider = m.provider;
+                        select.appendChild(opt);
+                    });
+                    showStatus(`Fetched ${data.length} models from custom provider`, 'bg-green-100 text-green-800');
+                }
+            } catch (e) {
+                showStatus('Fetch failed: ' + e.message, 'bg-red-100 text-red-800');
+            } finally {
+                btn.innerText = originalText;
+                btn.disabled = false;
+            }
+        }
+
+        async function testCustomProvider() {
+            const btn = event.target;
+            const originalText = btn.innerText;
+            btn.innerText = 'Testing...';
+            btn.disabled = true;
+            const baseUrl = document.getElementById('customBaseUrl').value.trim();
+            const apiKey = document.getElementById('customApiKey').value.trim();
+            const select = document.getElementById('customModelSelect');
+            const model = select.value;
+            if (!baseUrl) {
+                showStatus('Please enter a base URL', 'bg-red-100 text-red-800');
+                btn.innerText = originalText;
+                btn.disabled = false;
+                return;
+            }
+            try {
+                const res = await fetch('/ui/custom-test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ baseUrl, apiKey, model })
+                });
+                const result = await res.json();
+                if (result.success) {
+                    showStatus('Custom provider TEST SUCCESS: ' + result.content, 'bg-green-100 text-green-800');
+                } else {
+                    showStatus('Custom provider TEST FAILED: ' + result.error, 'bg-red-100 text-red-800');
+                }
+            } catch (e) {
+                showStatus('Test error: ' + e.message, 'bg-red-100 text-red-800');
+            } finally {
+                btn.innerText = originalText;
+                btn.disabled = false;
+            }
+        }
+
+        function applyCustomModel(profile) {
+            const select = document.getElementById('customModelSelect');
+            const opt = select.options[select.selectedIndex];
+            if (!opt || !opt.value) {
+                showStatus('Please select a model first', 'bg-red-100 text-red-800');
+                return;
+            }
+            document.getElementById(profile + 'ModelSelect').innerHTML = '';
+            const clone = opt.cloneNode(true);
+            document.getElementById(profile + 'ModelSelect').appendChild(clone);
+            document.getElementById(profile + 'ModelSelect').value = opt.value;
+            document.getElementById(profile + 'TargetUrl').value = opt.dataset.url;
+            document.getElementById(profile + 'ApiKey').value = opt.dataset.key;
+            document.getElementById(profile + 'StatusModel').innerText = opt.value;
+            document.getElementById(profile + 'StatusProvider').innerText = 'Custom';
+            refreshContextWindow(profile);
+            showStatus(`Applied ${opt.value} to ${profile.toUpperCase()} profile. Click Save to persist.`, 'bg-green-100 text-green-800');
+        }
+
+        // ── Request Inspector ──
+        let inspectorData = [];
+        let expandedReqId = null;
+
+        async function loadInspector() {
+            try {
+                const res = await fetch('/ui/details');
+                const data = await res.json();
+                if (JSON.stringify(data) === JSON.stringify(inspectorData)) return;
+                inspectorData = data;
+                renderInspector();
+            } catch (e) {}
+        }
+
+        function renderInspector() {
+            const container = document.getElementById('inspectorList');
+            if (inspectorData.length === 0) {
+                container.innerHTML = '<div class="text-gray-400 text-sm italic">Requests will appear here...</div>';
+                return;
+            }
+            container.innerHTML = inspectorData.map(item => {
+                const isExpanded = item.reqId === expandedReqId;
+                const statusColor = item.status === 'error' ? 'bg-red-100 text-red-700' :
+                                    item.status === 'completed' ? 'bg-green-100 text-green-700' :
+                                    'bg-amber-100 text-amber-700';
+                const statusLabel = item.status === 'error' ? 'ERROR' :
+                                    item.status === 'completed' ? 'OK' : 'PENDING';
+                const hasThinking = item.thinking && item.thinking.length > 0;
+                const hasTools = item.toolCalls && item.toolCalls.length > 0;
+                const finishBadge = item.finishReason ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-200 text-gray-600 ml-2">finish: ${item.finishReason}</span>` : '';
+
+                let detailHtml = '';
+                if (isExpanded) {
+                    detailHtml = `<div class="mt-3 space-y-3 border-t pt-3">`;
+
+                    // Thinking section
+                    if (hasThinking) {
+                        detailHtml += `
+                            <div class="bg-indigo-50 rounded p-3">
+                                <p class="text-[10px] font-bold text-indigo-700 uppercase mb-1">🤔 Model Thinking</p>
+                                <pre class="text-xs text-indigo-900 whitespace-pre-wrap font-mono leading-relaxed">${escapeHtml(item.thinking)}</pre>
+                            </div>`;
+                    }
+
+                    // Tool calls section
+                    if (hasTools) {
+                        detailHtml += `
+                            <div class="bg-orange-50 rounded p-3">
+                                <p class="text-[10px] font-bold text-orange-700 uppercase mb-1">🔧 Tool Calls</p>
+                                ${item.toolCalls.map(tc => `
+                                    <div class="mb-2">
+                                        <p class="text-xs font-bold text-orange-800">${escapeHtml(tc.name)} <span class="text-[10px] text-gray-500 font-normal">(${tc.id})</span></p>
+                                        <pre class="text-[10px] text-orange-900 bg-white rounded p-2 mt-1 overflow-x-auto">${escapeHtml(prettyJson(tc.arguments))}</pre>
+                                    </div>
+                                `).join('')}
+                            </div>`;
+                    }
+
+                    // Response content
+                    if (item.responseBody) {
+                        const choice = item.responseBody.choices?.[0];
+                        const content = choice?.message?.content || '';
+                        if (content) {
+                            detailHtml += `
+                                <div class="bg-gray-50 rounded p-3">
+                                    <p class="text-[10px] font-bold text-gray-700 uppercase mb-1">💬 Response Content</p>
+                                    <pre class="text-xs text-gray-800 whitespace-pre-wrap font-mono leading-relaxed">${escapeHtml(content)}</pre>
+                                </div>`;
+                        }
+                    }
+
+                    // Error
+                    if (item.error) {
+                        detailHtml += `
+                            <div class="bg-red-50 rounded p-3">
+                                <p class="text-[10px] font-bold text-red-700 uppercase mb-1">❌ Error</p>
+                                <pre class="text-xs text-red-800 whitespace-pre-wrap font-mono">${escapeHtml(item.error)}</pre>
+                            </div>`;
+                    }
+
+                    // Raw JSON toggle
+                    detailHtml += `
+                        <details class="text-xs">
+                            <summary class="cursor-pointer text-gray-500 hover:text-gray-700 font-medium">View Raw Request / Response</summary>
+                            <div class="mt-2 space-y-2">
+                                <div>
+                                    <p class="text-[10px] font-bold text-gray-500 uppercase">Request</p>
+                                    <pre class="text-[10px] bg-gray-100 rounded p-2 overflow-x-auto">${escapeHtml(prettyJson(item.requestBody))}</pre>
+                                </div>
+                                <div>
+                                    <p class="text-[10px] font-bold text-gray-500 uppercase">Response</p>
+                                    <pre class="text-[10px] bg-gray-100 rounded p-2 overflow-x-auto">${escapeHtml(prettyJson(item.responseBody))}</pre>
+                                </div>
+                            </div>
+                        </details>`;
+
+                    detailHtml += `</div>`;
+                }
+
+                return `
+                    <div class="border rounded-lg p-3 cursor-pointer hover:bg-gray-50 transition" onclick="toggleInspector('${item.reqId}')">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-2">
+                                <span class="text-[10px] font-bold px-1.5 py-0.5 rounded ${statusColor}">${statusLabel}</span>
+                                <span class="text-xs font-mono text-gray-600">${item.timestamp}</span>
+                                ${hasThinking ? '<span class="text-[10px] text-indigo-600">🤔</span>' : ''}
+                                ${hasTools ? '<span class="text-[10px] text-orange-600">🔧</span>' : ''}
+                                ${item.error ? '<span class="text-[10px] text-red-600">❌</span>' : ''}
+                            </div>
+                            ${finishBadge}
+                        </div>
+                        ${detailHtml}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function toggleInspector(reqId) {
+            expandedReqId = expandedReqId === reqId ? null : reqId;
+            renderInspector();
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function prettyJson(obj) {
+            if (!obj) return '';
+            try {
+                return JSON.stringify(typeof obj === 'string' ? JSON.parse(obj) : obj, null, 2);
+            } catch (e) {
+                return String(obj);
+            }
+        }
+
+        // Initial load & Polling
+        // Pre-populate with fallback models so UI is never empty
+        ['claudeModelSelect', 'codexModelSelect'].forEach(id => populateSelect(id, FALLBACK_MODELS));
+        
+        fetch('/ui/config').then(r => r.json()).then(cfg => {
+            applyConfigToUI(cfg);
+        }).catch(e => console.error('[UI] Config fetch failed:', e));
+        
+        loadModels();
+        setInterval(loadActivity, 2000);
+        setInterval(loadRequests, 2000);
+        setInterval(loadInspector, 2000);
+    </script>
+</body>
+</html>

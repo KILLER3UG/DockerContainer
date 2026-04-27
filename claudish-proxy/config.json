@@ -1,0 +1,27 @@
+{
+  "claude": {
+    "currentModel": "minimax-m2.5-free",
+    "targetUrl": "https://opencode.ai/zen/v1/chat/completions",
+    "apiKey": "sk-SdUrgeLcJ1PYExd37NcMzjWR6wwxUXncWrcUkWaumJNBDhQ37OZFQBrQUzMpldDI",
+    "contextWindow": 256000,
+    "contextModelId": "minimax-m2.5-free"
+  },
+  "codex": {
+    "currentModel": "meta/llama-3.1-405b-instruct",
+    "targetUrl": "https://integrate.api.nvidia.com/v1/chat/completions",
+    "apiKey": "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",
+    "contextWindow": 128000
+  },
+  "bookmarks": [
+    {
+      "name": "NVIDIA NIM",
+      "baseUrl": "https://integrate.api.nvidia.com/v1",
+      "apiKey": "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"
+    },
+    {
+      "name": "OpenRouter",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "apiKey": "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"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+services:
+  claudish-proxy:
+    build: .
+    container_name: claudish-proxy
+    environment:
+      - KILOCODE_API_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbnYiOiJwcm9kdWN0aW9uIiwia2lsb1VzZXJJZCI6IjNlNjA2YmUzLTI1ZGUtNDIxYi04N2VhLWZmYjZjMmY0YTcwNyIsImFwaVRva2VuUGVwcGVyIjoiODRhNjVlZmYtNGM0ZS00NTU1LWI0ZWYtNDNkMzE3Mzg0ZGFlIiwidmVyc2lvbiI6MywiaWF0IjoxNzc3MTA3NTIyLCJleHAiOjE5MzQ3ODc1MjJ9.MMCp6xRUgo_bKAURXMvkXOx1OgffymXRhx7VoQlcYWI
+      - OPENCODE_API_KEY=sk-SdUrgeLcJ1PYExd37NcMzjWR6wwxUXncWrcUkWaumJNBDhQ37OZFQBrQUzMpldDI
+      - OPENROUTER_API_KEY=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
+      - GATEWAY_API_KEY=your-personal-key-here
+      - CLINE_API_KEY=sk_ec4b4fda631e29ff662993d4a8210fc94d01515124afeb4db21420d10c7d4056
+    volumes:
+      - ./config.json:/app/config.json
+    ports:
+      - "8085:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: always
+    # --- THE CRITICAL FIX ---
+    tty: true
+    stdin_open: true

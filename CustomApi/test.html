@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kilo AI Gateway Test</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen p-8">
+    <div class="max-w-3xl mx-auto">
+        <h1 class="text-3xl font-bold mb-8 text-blue-400">Kilo AI Gateway Tester</h1>
+        
+        <div class="space-y-6">
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-2">Model</label>
+                <select id="model" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3">
+                    <option value="openrouter/free">openrouter/free (Recommended)</option>
+                    <option value="opencode/minimax-m2.5-free">opencode/minimax-m2.5-free</option>
+                    <option value="openrouter/minimax/minimax-m2.5:free">openrouter/minimax-m2.5:free</option>
+                    <option value="openrouter/nousresearch/hermes-3-llama-3.1-405b:free">openrouter/hermes-3-405b:free</option>
+                    <option value="openrouter/openai/gpt-oss-20b:free">openrouter/gpt-oss-20b:free</option>
+                </select>
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-2">Message</label>
+                <textarea id="prompt" rows="4" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3" placeholder="Enter your message...">Explain quantum computing in simple terms</textarea>
+            </div>
+
+            <button id="send" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-6 rounded-lg transition-colors">
+                Send Request
+            </button>
+
+            <div id="status" class="text-sm text-gray-400 hidden">Sending request...</div>
+
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-2">Response</label>
+                <pre id="response" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 min-h-32 whitespace-pre-wrap"></pre>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const sendBtn = document.getElementById('send');
+        const statusEl = document.getElementById('status');
+        const responseEl = document.getElementById('response');
+
+        sendBtn.addEventListener('click', async () => {
+            const model = document.getElementById('model').value;
+            const prompt = document.getElementById('prompt').value;
+            
+            statusEl.classList.remove('hidden');
+            responseEl.textContent = '';
+
+            try {
+                const res = await fetch('http://localhost:8787/kilo/chat/completions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: model,
+                        messages: [{ role: 'user', content: prompt }],
+                        stream: false,
+                        temperature: 0.7
+                    })
+                });
+
+                const data = await res.json();
+                
+                if (data.choices && data.choices[0]) {
+                    responseEl.textContent = data.choices[0].message.content;
+                } else {
+                    responseEl.textContent = JSON.stringify(data, null, 2);
+                }
+            } catch (err) {
+                responseEl.textContent = `Error: ${err.message}`;
+            }
+
+            statusEl.classList.add('hidden');
+        });
+    </script>
+</body>
+</html>
