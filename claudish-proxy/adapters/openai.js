@@ -1,8 +1,9 @@
 const { getProfile } = require('../utils/config');
-const { logActivity, captureRequest, captureResponse, captureError } = require('../utils/logger');
+const { logActivity, endRequest, captureRequest, captureResponse, captureTokens, captureError } = require('../utils/logger');
 const { applySelfHealToMessages } = require('../utils/selfheal');
 const { getModelContextWindow, saveModelContextWindow, loadModelContextWindow } = require('../utils/models');
 const { estimateTokens, formatTokenCount } = require('../utils/tokens');
+const { buildFriendlyRateLimitMessage, getRetryDelayMs, isRetryableStatus } = require('../utils/upstream');
 
 // ── Parse SSE stream into a complete Chat Completions JSON object ──
 function parseSSEToJSON(sseText) {
@@ -147,6 +148,17 @@ function translateResponsesInput(oReq) {
     oReq.messages = messages;
 }
 
+function extractUsageTokens(usage, contextLabel) {
+    const inputTokens = usage?.prompt_tokens || usage?.input_tokens || 0;
+    const outputTokens = usage?.completion_tokens || usage?.output_tokens || 0;
+    if (!usage) {
+        console.warn(`[Proxy Usage]: ${contextLabel} returned no usage data`);
+    } else if (inputTokens === 0 && outputTokens === 0) {
+        console.warn(`[Proxy Usage]: ${contextLabel} usage payload had zero tokens`);
+    }
+    return { inputTokens, outputTokens };
+}
+
 // ── Main handler for /v1/chat/completions and /v1/responses ──
 async function handleChatCompletions(req, res, cleanPath, reqId) {
     let body = '';
@@ -167,6 +179,22 @@ async function handleChatCompletions(req, res, cleanPath, reqId) {
     req.on('end', async () => {
         bodyComplete = true;
         clearTimeout(bodyTimeout);
+
+        // ── Per-request tracking — endRequest must fire exactly once ──
+        let requestModel = 'unknown';
+        let requestStatus = 'success';
+        let requestError = null;
+        let _endCalled = false;
+        function finishRequest() {
+            if (_endCalled) return;
+            _endCalled = true;
+            endRequest(reqId, {
+                status: requestStatus,
+                model: requestModel,
+                error: requestError
+                // tokens are read automatically from requestDetails by endRequest
+            });
+        }
 
         try {
             console.log(`[Proxy Body]: ${cleanPath} (${body.length} bytes)`);
@@ -202,13 +230,20 @@ async function handleChatCompletions(req, res, cleanPath, reqId) {
             const existingSystemIdx = oReq.messages.findIndex(m => m.role === 'system');
             if (existingSystemIdx >= 0) {
                 const existing = oReq.messages[existingSystemIdx].content || '';
-                oReq.messages[existingSystemIdx].content = windowsSystemPrompt + '\n\n' + existing;
+                const combined = windowsSystemPrompt + '\n\n' + existing;
+                if (combined.length > 8000) {
+                    console.warn(`[Proxy System Prompt]: Codex system prompt is ${combined.length} chars — may be truncated by upstream model.`);
+                } else {
+                    console.log(`[Proxy System Prompt]: Codex system prompt length=${combined.length} chars`);
+                }
+                oReq.messages[existingSystemIdx].content = combined;
             } else {
+                console.log(`[Proxy System Prompt]: Codex system prompt length=${windowsSystemPrompt.length} chars (injected)`);
                 oReq.messages.unshift({ role: 'system', content: windowsSystemPrompt });
             }
 
             // ── Dynamic model hijacking (Ollama-style) ──
-            let requestModel = cfg.currentModel;
+            requestModel = cfg.currentModel || oReq.model;
             const authHeader = req.headers['authorization'] || '';
             if (authHeader.includes('Bearer model:')) {
                 const extractedModel = authHeader.split('model:')[1].trim();
@@ -286,15 +321,27 @@ async function handleChatCompletions(req, res, cleanPath, reqId) {
                 console.log(`[Proxy Params]: max_tokens=${oReq.max_tokens}, temp=${oReq.temperature}, top_p=${oReq.top_p}`);
             }
 
-            const response = await fetch(cfg.targetUrl, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${cfg.apiKey}`
-                },
-                body: JSON.stringify(oReq),
-                signal: AbortSignal.timeout(300000)
-            });
+            let response;
+            let attempts = 0;
+            const maxAttempts = 3;
+            while (attempts < maxAttempts) {
+                attempts++;
+                response = await fetch(cfg.targetUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${cfg.apiKey}`
+                    },
+                    body: JSON.stringify(oReq),
+                    signal: AbortSignal.timeout(300000)
+                });
+                if (!isRetryableStatus(response.status) || attempts >= maxAttempts) {
+                    break;
+                }
+                const delayMs = getRetryDelayMs(response, attempts);
+                console.warn(`[Proxy Retry]: OpenAI upstream returned ${response.status}. Retrying in ${delayMs}ms (attempt ${attempts}/${maxAttempts})`);
+                await new Promise(resolve => setTimeout(resolve, delayMs));
+            }
 
             console.log(`[Proxy Upstream]: Received status ${response.status}`);
 
@@ -304,8 +351,18 @@ async function handleChatCompletions(req, res, cleanPath, reqId) {
             if (isResponsesEndpoint) {
                 const rawBody = await response.text();
                 if (!response.ok) {
+                    if (response.status === 429) {
+                        requestStatus = 'error';
+                        requestError = buildFriendlyRateLimitMessage(response.status, rawBody, attempts);
+                    }
                     res.writeHead(response.status, { 'Content-Type': 'application/json' });
-                    return res.end(rawBody);
+                    return res.end(response.status === 429 ? JSON.stringify({
+                        type: 'error',
+                        error: {
+                            type: 'rate_limit_error',
+                            message: requestError
+                        }
+                    }) : rawBody);
                 }
                 try {
                     const standardData = upstreamIsStream ? parseSSEToJSON(rawBody) : JSON.parse(rawBody);
@@ -327,6 +384,8 @@ async function handleChatCompletions(req, res, cleanPath, reqId) {
                         output_tokens: chatUsage.completion_tokens || 0,
                         total_tokens: chatUsage.total_tokens || (chatUsage.prompt_tokens || 0) + (chatUsage.completion_tokens || 0)
                     };
+                    // Record tokens in the log immediately (no global endRequest for this path)
+                    captureTokens(reqId, usage.input_tokens, usage.output_tokens);
 
                     // Build output items
                     const outputItems = [];
@@ -429,42 +488,86 @@ async function handleChatCompletions(req, res, cleanPath, reqId) {
 
                     // 5. [DONE]
                     res.write('data: [DONE]\n\n');
-                    return res.end();
+                    res.end();
+                    finishRequest();
+                    return;
                 } catch (transErr) {
+                    requestStatus = 'error';
+                    requestError = transErr.message;
                     console.error('[Proxy Translation]: FAILED', transErr.message);
                     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
                     res.write(`data: ${JSON.stringify({ type: 'error', error: { message: transErr.message } })}\n\n`);
-                    return res.end();
+                    res.end();
+                    finishRequest();
+                    return;
                 }
             }
 
             // ── Streaming handling ──
 
             if (upstreamIsStream && clientWantsStream) {
-                // Forward provider SSE directly to client
+                // Forward SSE directly; accumulate body copy to extract usage when done.
                 res.writeHead(response.status, { 'Content-Type': 'text/event-stream' });
                 if (!response.body) {
                     res.end();
+                    finishRequest();
                 } else {
                     const reader = response.body.getReader();
+                    let accumulatedText = '';
                     function pump() {
                         reader.read().then(({ done, value }) => {
-                            if (done) { res.end(); return; }
-                            res.write(Buffer.from(value));
+                            if (done) {
+                                let streamInputTokens = 0;
+                                let streamOutputTokens = 0;
+                                for (const line of accumulatedText.split('\n')) {
+                                    if (!line.startsWith('data: ')) continue;
+                                    try {
+                                        const chunk = JSON.parse(line.slice(6).trim());
+                                        if (chunk.usage) {
+                                            streamInputTokens  = chunk.usage.prompt_tokens     || chunk.usage.input_tokens     || streamInputTokens;
+                                            streamOutputTokens = chunk.usage.completion_tokens || chunk.usage.output_tokens || streamOutputTokens;
+                                        }
+                                    } catch (e) { /* ignore */ }
+                                }
+                                captureTokens(reqId, streamInputTokens, streamOutputTokens);
+                                res.end();
+                                finishRequest(); // ← request is now done
+                                return;
+                            }
+                            const chunk = Buffer.from(value);
+                            accumulatedText += chunk.toString();
+                            res.write(chunk);
                             pump();
                         }).catch(err => {
                             console.error('[Proxy Stream Error]:', err);
+                            requestStatus = 'error';
+                            requestError = err.message;
                             res.end();
+                            finishRequest();
                         });
                     }
                     pump();
+                    return; // finishRequest is called inside pump's done handler
                 }
             } else if (!upstreamIsStream && clientWantsStream) {
                 // Provider returned JSON but client expects SSE (Codex)
                 const rawBody = await response.text();
+                if (!response.ok) {
+                    requestStatus = 'error';
+                    requestError = response.status === 429
+                        ? buildFriendlyRateLimitMessage(response.status, rawBody, attempts)
+                        : `Upstream Error (${response.status}): ${rawBody}`;
+                    res.writeHead(response.status, { 'Content-Type': 'text/event-stream' });
+                    res.write(`data: ${JSON.stringify({ type: 'error', error: { message: requestError } })}\n\n`);
+                    res.end();
+                    return;
+                }
                 try {
                     const data = JSON.parse(rawBody);
                     captureResponse(reqId, data);
+                    const inTok  = data.usage?.prompt_tokens     || data.usage?.input_tokens     || 0;
+                    const outTok = data.usage?.completion_tokens || data.usage?.output_tokens || 0;
+                    captureTokens(reqId, inTok, outTok);
                     const upstreamMsg = data.choices?.[0]?.message;
                     const delta = {
                         role: upstreamMsg?.role,
@@ -495,15 +598,28 @@ async function handleChatCompletions(req, res, cleanPath, reqId) {
                     res.write(`data: [DONE]\n\n`);
                     res.end();
                 } catch (e) {
+                    requestStatus = 'error';
+                    requestError = e.message;
                     res.writeHead(response.status, { 'Content-Type': 'application/json' });
                     res.end(rawBody);
                 }
             } else if (upstreamIsStream && !clientWantsStream) {
                 // Upstream returned SSE but client expects JSON — parse and aggregate
                 const rawBody = await response.text();
+                if (!response.ok) {
+                    requestStatus = 'error';
+                    requestError = response.status === 429
+                        ? buildFriendlyRateLimitMessage(response.status, rawBody, attempts)
+                        : `Upstream Error (${response.status}): ${rawBody}`;
+                    res.writeHead(response.status, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: { message: requestError } }));
+                    return;
+                }
                 try {
                     const parsed = parseSSEToJSON(rawBody);
                     captureResponse(reqId, parsed);
+                    const { inputTokens: inTok, outputTokens: outTok } = extractUsageTokens(parsed.usage, 'SSE->JSON aggregation');
+                    captureTokens(reqId, inTok, outTok);
                     res.writeHead(200, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify(parsed));
                 } catch (e) {
@@ -514,18 +630,33 @@ async function handleChatCompletions(req, res, cleanPath, reqId) {
             } else {
                 // Non-streaming passthrough
                 const rawBody = await response.text();
+                if (!response.ok) {
+                    requestStatus = 'error';
+                    requestError = response.status === 429
+                        ? buildFriendlyRateLimitMessage(response.status, rawBody, attempts)
+                        : `Upstream Error (${response.status}): ${rawBody}`;
+                    res.writeHead(response.status, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: { message: requestError } }));
+                    return;
+                }
                 try {
                     const parsed = JSON.parse(rawBody);
                     captureResponse(reqId, parsed);
+                    const { inputTokens: inTok, outputTokens: outTok } = extractUsageTokens(parsed.usage, 'JSON passthrough');
+                    captureTokens(reqId, inTok, outTok);
                 } catch (e) { /* ignore parse errors for passthrough */ }
                 res.writeHead(response.status, { 'Content-Type': 'application/json' });
                 res.end(rawBody);
             }
         } catch (e) {
+            requestStatus = 'error';
+            requestError = e.message;
             console.error('OpenAI Adapter Error:', e);
             captureError(reqId, e);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
+            if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: { message: 'Proxy Error: ' + e.message } }));
+        } finally {
+            finishRequest(); // no-op if already called by streaming path
         }
     });
 }

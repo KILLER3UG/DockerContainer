@@ -1,16 +1,20 @@
 {
   "claude": {
-    "currentModel": "minimax-m2.5-free",
-    "targetUrl": "https://opencode.ai/zen/v1/chat/completions",
-    "apiKey": "sk-SdUrgeLcJ1PYExd37NcMzjWR6wwxUXncWrcUkWaumJNBDhQ37OZFQBrQUzMpldDI",
-    "contextWindow": 256000,
-    "contextModelId": "minimax-m2.5-free"
+    "currentModel": "claude-opus-4-7",
+    "targetUrl": "https://api.minimax.io/anthropic/v1/messages",
+    "apiKey": "sk-cp-XCBVUifgJiT09KyY77bytczKTfRe5T3riqFfGcaF3UEEv5KhH9xKbDd9YBU1mIzQPWSTFGgvnREWliN6xQRDayl37PqlV-z0pLJabBes4s904-jhZ5fu-IA",
+    "_upstreamModel": "MiniMax-M2.7",
+    "contextWindow": 190512,
+    "contextModelId": "MiniMax-M2.7",
+    "inputCostPer1M": 0,
+    "outputCostPer1M": 0
   },
   "codex": {
     "currentModel": "meta/llama-3.1-405b-instruct",
     "targetUrl": "https://integrate.api.nvidia.com/v1/chat/completions",
     "apiKey": "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",
-    "contextWindow": 128000
+    "contextWindow": 131072,
+    "contextModelId": "meta/llama-3.1-405b-instruct"
   },
   "bookmarks": [
     {
@@ -22,6 +26,17 @@
       "name": "OpenRouter",
       "baseUrl": "https://openrouter.ai/api/v1",
       "apiKey": "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"
+    },
+    {
+      "name": "minimax",
+      "baseUrl": "https://api.minimax.io/anthropic",
+      "apiKey": "sk-cp-XCBVUifgJiT09KyY77bytczKTfRe5T3riqFfGcaF3UEEv5KhH9xKbDd9YBU1mIzQPWSTFGgvnREWliN6xQRDayl37PqlV-z0pLJabBes4s904-jhZ5fu-IA"
     }
-  ]
+  ],
+  "customProvider": {
+    "baseUrl": "https://api.minimax.io/anthropic",
+    "apiKey": "sk-cp-XCBVUifgJiT09KyY77bytczKTfRe5T3riqFfGcaF3UEEv5KhH9xKbDd9YBU1mIzQPWSTFGgvnREWliN6xQRDayl37PqlV-z0pLJabBes4s904-jhZ5fu-IA"
+  },
+  "requestLogLimit": 1000000000,
+  "pendingRequestTimeoutMinutes": 30
 }

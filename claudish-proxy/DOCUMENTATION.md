@@ -900,7 +900,7 @@ You can use **any** provider that implements the OpenAI Chat Completions API. Ex
 ### Step 1: Navigate to the Project
 
 ```powershell
-cd C:\Users\rober\OneDrive\Documents\DockerContainer\claudish-proxy
+cd C:\Users\rober\LocalFolders\DockerContainer\claudish-proxy
 ```
 
 ### Step 2: Create the Environment File
@@ -1047,13 +1047,13 @@ Open **two separate PowerShell windows**:
 
 **Window 1:**
 ```powershell
-cd C:\Users\rober\OneDrive\Documents\DockerContainer\claudish-proxy
+cd C:\Users\rober\LocalFolders\DockerContainer\claudish-proxy
 .\claude-local.bat
 ```
 
 **Window 2:**
 ```powershell
-cd C:\Users\rober\OneDrive\Documents\DockerContainer\claudish-proxy
+cd C:\Users\rober\LocalFolders\DockerContainer\claudish-proxy
 .\codex-local.bat
 ```
 

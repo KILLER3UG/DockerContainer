@@ -1,309 +1,793 @@
 <!DOCTYPE html>
-<html>
+<html lang="en" class="dark">
 <head>
-    <title>Claudish Proxy Control</title>
+    <meta charset="UTF-8">
+    <title>Claudish Proxy</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = { darkMode: 'class' };
+    </script>
+    <style>
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .dark ::-webkit-scrollbar-track { background: #1e293b; }
+        .dark ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+        .dark ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+        
+        /* Smooth transitions */
+        .card-hover { transition: border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease; }
+        .card-hover:hover { border-color: #cbd5e1; box-shadow: 0 10px 30px -18px rgba(15, 23, 42, 0.28); }
+        .dark .card-hover:hover { border-color: #334155; box-shadow: 0 12px 30px -20px rgba(2, 6, 23, 0.9); }
+        
+        /* Status pulse */
+        @keyframes pulse-ring {
+            0% { transform: scale(0.8); opacity: 0.5; }
+            100% { transform: scale(2); opacity: 0; }
+        }
+        .pulse-ring::before {
+            content: '';
+            position: absolute;
+            inset: -4px;
+            border-radius: 50%;
+            background: currentColor;
+            animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        
+        /* Table row hover */
+        tr.hover-row { transition: background-color 0.15s ease; }
+        tr.hover-row:hover { background-color: #f8fafc; }
+        .dark tr.hover-row:hover { background-color: #1e293b; }
+        
+        /* Expand animation */
+        .expand-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+        }
+        .expand-content.open {
+            max-height: 2000px;
+        }
+
+        .surface {
+            border: 1px solid rgba(226, 232, 240, 0.9);
+            background: rgba(255, 255, 255, 0.92);
+            box-shadow: 0 10px 30px -24px rgba(15, 23, 42, 0.18);
+        }
+        .dark .surface {
+            border-color: rgba(30, 41, 59, 0.95);
+            background: rgba(15, 23, 42, 0.88);
+            box-shadow: 0 16px 34px -26px rgba(2, 6, 23, 0.85);
+        }
+        .subtle-surface {
+            border: 1px solid rgba(226, 232, 240, 0.85);
+            background: rgba(248, 250, 252, 0.92);
+        }
+        .dark .subtle-surface {
+            border-color: rgba(30, 41, 59, 0.9);
+            background: rgba(15, 23, 42, 0.72);
+        }
+        .minimal-input {
+            border: 1px solid #cbd5e1;
+            background: rgba(255, 255, 255, 0.96);
+            transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+        }
+        .dark .minimal-input {
+            border-color: #334155;
+            background: rgba(15, 23, 42, 0.96);
+        }
+        .minimal-input:focus {
+            border-color: #94a3b8;
+            box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.16);
+            outline: none;
+        }
+        .minimal-button {
+            border: 1px solid #cbd5e1;
+            background: rgba(255, 255, 255, 0.96);
+            color: #0f172a;
+            transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+        }
+        .minimal-button:hover {
+            border-color: #94a3b8;
+            background: #f8fafc;
+        }
+        .dark .minimal-button {
+            border-color: #334155;
+            background: rgba(15, 23, 42, 0.96);
+            color: #e2e8f0;
+        }
+        .dark .minimal-button:hover {
+            border-color: #475569;
+            background: #172033;
+        }
+        .minimal-button.primary {
+            background: #0f172a;
+            border-color: #0f172a;
+            color: #f8fafc;
+        }
+        .minimal-button.primary:hover {
+            background: #1e293b;
+            border-color: #1e293b;
+        }
+        .dark .minimal-button.primary {
+            background: #e2e8f0;
+            border-color: #e2e8f0;
+            color: #0f172a;
+        }
+        .dark .minimal-button.primary:hover {
+            background: #f8fafc;
+            border-color: #f8fafc;
+        }
+        .metric-value {
+            letter-spacing: 0;
+            font-variant-numeric: tabular-nums;
+        }
+    </style>
 </head>
-<body class="bg-gray-100 min-h-screen p-4 md:p-8">
-    <div class="max-w-7xl mx-auto space-y-6">
-        <!-- Header -->
-        <div class="flex justify-between items-center">
-            <h1 class="text-3xl font-bold text-gray-800">Claudish Proxy</h1>
-            <div class="flex items-center gap-2">
-                <span class="relative flex h-3 w-3">
-                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                    <span class="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
-                </span>
-                <span class="text-sm text-gray-600 font-medium">Running</span>
-            </div>
-        </div>
+<body class="bg-slate-100 dark:bg-slate-950 min-h-screen transition-colors duration-300 text-slate-900 dark:text-slate-100">
+    <div class="dark hidden"></div>
+    <div class="min-h-screen lg:grid lg:grid-cols-[280px,minmax(0,1fr)]">
+        <aside class="hidden lg:flex lg:flex-col border-r border-slate-200/80 dark:border-slate-800 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl">
+            <div class="sticky top-0 flex h-screen flex-col px-5 py-6">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-900 text-sm font-semibold text-white shadow-lg dark:bg-slate-100 dark:text-slate-900">
+                        CP
+                    </div>
+                    <div>
+                        <h1 class="text-base font-semibold text-slate-900 dark:text-slate-100">Claudish Proxy</h1>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Local gateway control</p>
+                    </div>
+                </div>
 
-        <!-- Status Cards -->
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div class="bg-white rounded-lg shadow-sm p-4 border-l-4 border-purple-500">
-                <p class="text-xs text-gray-500 uppercase font-bold">Claude Model</p>
-                <p id="claudeStatusModel" class="text-sm font-mono text-gray-800 truncate mt-1">loading...</p>
-                <p id="claudeStatusProvider" class="text-[10px] text-gray-400 truncate">--</p>
-                <p id="claudeStatusContext" class="text-[10px] text-emerald-600 font-medium mt-0.5">--</p>
-            </div>
-            <div class="bg-white rounded-lg shadow-sm p-4 border-l-4 border-blue-500">
-                <p class="text-xs text-gray-500 uppercase font-bold">Codex Model</p>
-                <p id="codexStatusModel" class="text-sm font-mono text-gray-800 truncate mt-1">loading...</p>
-                <p id="codexStatusProvider" class="text-[10px] text-gray-400 truncate">--</p>
-                <p id="codexStatusContext" class="text-[10px] text-emerald-600 font-medium mt-0.5">--</p>
-            </div>
-            <div class="bg-white rounded-lg shadow-sm p-4 border-l-4 border-amber-500">
-                <p class="text-xs text-gray-500 uppercase font-bold">Pending Requests</p>
-                <p id="statusPending" class="text-2xl font-bold text-gray-800 mt-1">0</p>
-            </div>
-            <div class="bg-white rounded-lg shadow-sm p-4 border-l-4 border-emerald-500">
-                <p class="text-xs text-gray-500 uppercase font-bold">Total Requests</p>
-                <p id="statusTotal" class="text-2xl font-bold text-gray-800 mt-1">0</p>
-            </div>
-        </div>
-
-        <div class="grid md:grid-cols-2 gap-6">
-            <!-- Left Column: Active Clients + Profile Settings -->
-            <div class="space-y-6">
-                <!-- Active Clients -->
-                <div class="bg-white rounded-lg shadow-md p-6">
-                    <h2 class="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
-                        <svg class="w-5 h-5 text-indigo-600" fill="currentColor" viewBox="0 0 20 20"><path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3zM6 8a2 2 0 11-4 0 2 2 0 014 0zM16 18v-3a5.972 5.972 0 00-.75-2.906A3.005 3.005 0 0119 15v3h-3zM4.75 12.094A5.973 5.973 0 004 15v3H1v-3a3 3 0 013.75-2.906z"></path></svg>
-                        Active Clients
-                    </h2>
-                    <div class="grid grid-cols-2 gap-4">
-                        <div id="claudeCard" class="rounded-lg border-2 border-gray-200 p-4 text-center transition-all">
-                            <div class="text-2xl mb-1">🤖</div>
-                            <p class="font-bold text-gray-800">Claude</p>
-                            <p class="text-xs text-gray-500 mt-1">/v1/messages</p>
-                            <span id="claudeBadge" class="inline-block mt-2 px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-500">Inactive</span>
-                            <p id="claudeLast" class="text-[10px] text-gray-400 mt-1">--</p>
+                <div class="mt-8 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/60 p-4">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400 dark:text-slate-500">Runtime</p>
+                            <p class="mt-1 text-sm font-medium text-slate-800 dark:text-slate-100">Port 8085</p>
                         </div>
-                        <div id="codexCard" class="rounded-lg border-2 border-gray-200 p-4 text-center transition-all">
-                            <div class="text-2xl mb-1">💻</div>
-                            <p class="font-bold text-gray-800">Codex</p>
-                            <p class="text-xs text-gray-500 mt-1">/v1/chat/completions</p>
-                            <span id="codexBadge" class="inline-block mt-2 px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-500">Inactive</span>
-                            <p id="codexLast" class="text-[10px] text-gray-400 mt-1">--</p>
+                        <div class="flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-900/20 dark:text-emerald-300">
+                            <span class="relative flex h-2.5 w-2.5">
+                                <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+                                <span class="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
+                            </span>
+                            Running
+                        </div>
+                    </div>
+                    <div class="mt-4 grid grid-cols-2 gap-3 text-xs">
+                        <div class="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-2">
+                            <p class="text-slate-400 dark:text-slate-500">Claude</p>
+                            <p id="sidebarClaudeModel" class="mt-1 truncate font-medium text-slate-700 dark:text-slate-200">loading...</p>
+                        </div>
+                        <div class="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-2">
+                            <p class="text-slate-400 dark:text-slate-500">Codex</p>
+                            <p id="sidebarCodexModel" class="mt-1 truncate font-medium text-slate-700 dark:text-slate-200">loading...</p>
                         </div>
                     </div>
                 </div>
 
-                <!-- Profile Settings -->
-                <div class="bg-white rounded-lg shadow-md p-6">
-                    <div class="flex justify-between items-center mb-4">
-                        <h2 class="text-lg font-bold text-gray-800">Provider Profiles</h2>
-                        <button onclick="loadModels()" class="text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded hover:bg-indigo-200">🔄 Refresh Models</button>
-                    </div>
+                <nav class="mt-8 space-y-1.5">
+                    <button type="button" class="section-nav flex w-full items-center justify-between rounded-xl px-3 py-3 text-left text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100" data-section="overview" onclick="switchSection('overview')">
+                        <span>Overview</span>
+                        <span class="text-xs text-slate-400">01</span>
+                    </button>
+                    <button type="button" class="section-nav flex w-full items-center justify-between rounded-xl px-3 py-3 text-left text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100" data-section="profiles" onclick="switchSection('profiles')">
+                        <span>Providers</span>
+                        <span class="text-xs text-slate-400">02</span>
+                    </button>
+                    <button type="button" class="section-nav flex w-full items-center justify-between rounded-xl px-3 py-3 text-left text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100" data-section="traffic" onclick="switchSection('traffic')">
+                        <span>Traffic</span>
+                        <span class="text-xs text-slate-400">03</span>
+                    </button>
+                    <button type="button" class="section-nav flex w-full items-center justify-between rounded-xl px-3 py-3 text-left text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100" data-section="inspector" onclick="switchSection('inspector')">
+                        <span>Inspector</span>
+                        <span class="text-xs text-slate-400">04</span>
+                    </button>
+                </nav>
 
-                    <div class="grid md:grid-cols-2 gap-4">
+                <div class="mt-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/60 p-4">
+                    <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400 dark:text-slate-500">Quick Route</p>
+                    <p class="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">Use Providers to edit API keys, Traffic to monitor calls, and Inspector to inspect request bodies and tool traces.</p>
+                </div>
+            </div>
+        </aside>
+
+        <main class="min-w-0 px-4 py-5 md:px-6 md:py-6 lg:px-8">
+            <header class="surface mb-6 rounded-3xl backdrop-blur-xl">
+                <div class="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between md:p-6">
+                    <div class="min-w-0">
+                        <div class="flex items-center gap-3">
+                            <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-900 text-sm font-semibold text-white shadow-md dark:bg-slate-100 dark:text-slate-900">
+                                CP
+                            </div>
+                            <div class="min-w-0">
+                                <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400 dark:text-slate-500">Gateway Dashboard</p>
+                                <h2 class="truncate text-2xl font-semibold text-slate-900 dark:text-slate-100">Minimal control for providers and live traffic</h2>
+                            </div>
+                        </div>
+                        <p class="mt-3 max-w-3xl text-sm text-slate-500 dark:text-slate-400">Quiet defaults, clear routing, and just enough live request detail to see what the gateway is doing.</p>
+                    </div>
+                    <div class="flex items-center gap-2 self-start md:self-center">
+                        <div class="flex gap-1 bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg">
+                            <button onclick="setPeriod('all')" data-period="all" class="period-btn text-[11px] px-3 py-1 rounded-md bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-medium shadow-sm transition">All</button>
+                            <button onclick="setPeriod('day')" data-period="day" class="period-btn text-[11px] px-3 py-1 rounded-md text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition">Day</button>
+                            <button onclick="setPeriod('week')" data-period="week" class="period-btn text-[11px] px-3 py-1 rounded-md text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition">Week</button>
+                            <button onclick="setPeriod('month')" data-period="month" class="period-btn text-[11px] px-3 py-1 rounded-md text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition">Month</button>
+                            <button onclick="setPeriod('year')" data-period="year" class="period-btn text-[11px] px-3 py-1 rounded-md text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition">Year</button>
+                        </div>
+                        <button onclick="toggleDarkMode()" id="darkModeBtn" class="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-slate-600 dark:hover:text-slate-100" title="Toggle dark mode">
+                            <svg id="moonIcon" class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
+                            <svg id="sunIcon" class="hidden h-4 w-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+                        </button>
+                        <button onclick="loadModels()" class="minimal-button inline-flex items-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-medium shadow-sm">
+                            <span>Refresh Models</span>
+                        </button>
+                        <div class="hidden items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 md:flex">
+                            <span class="relative flex h-2.5 w-2.5">
+                                <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+                                <span class="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
+                            </span>
+                            Running
+                        </div>
+                    </div>
+                </div>
+                <div class="border-t border-slate-200/80 px-5 py-3 dark:border-slate-800 md:hidden">
+                    <div class="flex gap-2 overflow-x-auto pb-1">
+                        <button type="button" class="section-nav shrink-0 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300" data-section="overview" onclick="switchSection('overview')">Overview</button>
+                        <button type="button" class="section-nav shrink-0 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300" data-section="profiles" onclick="switchSection('profiles')">Providers</button>
+                        <button type="button" class="section-nav shrink-0 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300" data-section="traffic" onclick="switchSection('traffic')">Traffic</button>
+                        <button type="button" class="section-nav shrink-0 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300" data-section="inspector" onclick="switchSection('inspector')">Inspector</button>
+                    </div>
+                </div>
+            </header>
+
+            <section id="section-overview" class="dashboard-section space-y-6">
+                <div id="liveDebugPanel" class="surface rounded-2xl px-4 py-3 text-xs">
+                    <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-slate-600 dark:text-slate-300">
+                        <span>Requests: <strong id="debugRequestsAt">--</strong></span>
+                        <span>Activity: <strong id="debugActivityAt">--</strong></span>
+                        <span>Inspector: <strong id="debugInspectorAt">--</strong></span>
+                        <span>Errors: <strong id="debugErrorCount">0</strong></span>
+                    </div>
+                    <p id="debugLastError" class="mt-2 hidden text-[11px] text-red-600 dark:text-red-300 break-all"></p>
+                </div>
+                <div class="grid grid-cols-2 gap-3 xl:grid-cols-6">
+            <!-- Active Model Cards -->
+            <div class="surface card-hover col-span-2 rounded-3xl p-5">
+                <div class="flex items-center gap-2 mb-2">
+                    <span class="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Claude</span>
+                </div>
+                <p id="claudeStatusModel" class="text-base font-semibold text-slate-900 dark:text-slate-100 truncate">loading...</p>
+                <p id="claudeStatusAlias" class="mt-1 text-xs text-slate-500 dark:text-slate-400 truncate">Public alias: --</p>
+                <div class="mt-3 flex flex-wrap items-center gap-2">
+                    <span id="claudeStatusProvider" class="rounded-full border border-slate-200 dark:border-slate-700 px-2 py-1 text-[10px] text-slate-500 dark:text-slate-400">--</span>
+                    <span id="claudeStatusContext" class="rounded-full border border-slate-200 dark:border-slate-700 px-2 py-1 text-[10px] text-slate-500 dark:text-slate-400">--</span>
+                </div>
+                <div class="mt-3 grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="text-[10px] text-slate-500 dark:text-slate-400 uppercase">In / 1M</label>
+                        <input type="number" id="overviewClaudeInCost" step="0.000001" min="0" class="minimal-input mt-1 block w-full rounded-lg px-2 py-1 text-xs font-mono" placeholder="0.00" oninput="syncCostToProfile('claude','in')">
+                    </div>
+                    <div>
+                        <label class="text-[10px] text-slate-500 dark:text-slate-400 uppercase">Out / 1M</label>
+                        <input type="number" id="overviewClaudeOutCost" step="0.000001" min="0" class="minimal-input mt-1 block w-full rounded-lg px-2 py-1 text-xs font-mono" placeholder="0.00" oninput="syncCostToProfile('claude','out')">
+                    </div>
+                </div>
+            </div>
+            
+            <div class="surface card-hover col-span-2 rounded-3xl p-5">
+                <div class="flex items-center gap-2 mb-2">
+                    <span class="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Codex</span>
+                </div>
+                <p id="codexStatusModel" class="text-base font-semibold text-slate-900 dark:text-slate-100 truncate">loading...</p>
+                <div class="mt-3 flex flex-wrap items-center gap-2">
+                    <span id="codexStatusProvider" class="rounded-full border border-slate-200 dark:border-slate-700 px-2 py-1 text-[10px] text-slate-500 dark:text-slate-400">--</span>
+                    <span id="codexStatusContext" class="rounded-full border border-slate-200 dark:border-slate-700 px-2 py-1 text-[10px] text-slate-500 dark:text-slate-400">--</span>
+                </div>
+                <div class="mt-3 grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="text-[10px] text-slate-500 dark:text-slate-400 uppercase">In / 1M</label>
+                        <input type="number" id="overviewCodexInCost" step="0.000001" min="0" class="minimal-input mt-1 block w-full rounded-lg px-2 py-1 text-xs font-mono" placeholder="0.00" oninput="syncCostToProfile('codex','in')">
+                    </div>
+                    <div>
+                        <label class="text-[10px] text-slate-500 dark:text-slate-400 uppercase">Out / 1M</label>
+                        <input type="number" id="overviewCodexOutCost" step="0.000001" min="0" class="minimal-input mt-1 block w-full rounded-lg px-2 py-1 text-xs font-mono" placeholder="0.00" oninput="syncCostToProfile('codex','out')">
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Request Stats -->
+            <div class="surface card-hover rounded-3xl p-4">
+                <p class="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Pending Requests</p>
+                <p id="statusPending" class="metric-value mt-2 text-2xl font-semibold text-slate-900 dark:text-slate-100">0</p>
+                <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">Requests currently in progress</p>
+            </div>
+            
+            <div class="surface card-hover rounded-3xl p-4">
+                <p class="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Total Requests</p>
+                <p id="statusTotal" class="metric-value mt-2 text-2xl font-semibold text-slate-900 dark:text-slate-100">0</p>
+                <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">Completed requests in selected period</p>
+            </div>
+            
+            <div class="surface card-hover rounded-3xl p-4">
+                <p class="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Total Input Tokens</p>
+                <p id="statusInputTokens" class="metric-value mt-2 text-2xl font-semibold text-slate-900 dark:text-slate-100">0</p>
+                <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">Exact token count sent upstream</p>
+            </div>
+            
+            <div class="surface card-hover rounded-3xl p-4">
+                <p class="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Total Output Tokens</p>
+                <p id="statusOutputTokens" class="metric-value mt-2 text-2xl font-semibold text-slate-900 dark:text-slate-100">0</p>
+                <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">Exact token count returned by models</p>
+            </div>
+
+            <div class="surface card-hover rounded-3xl p-4">
+                <p class="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Estimated Cost</p>
+                <p id="statusTotalCost" class="metric-value mt-2 text-2xl font-semibold text-slate-900 dark:text-slate-100">$0.00</p>
+                <p id="statusCostBreakdown" class="mt-1 text-xs text-slate-400 dark:text-slate-500">In $0.00 / Out $0.00</p>
+            </div>
+            
+            <!-- Most Used Model -->
+            <div class="surface card-hover rounded-3xl p-4">
+                <p class="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Most Used Model</p>
+                <p id="statusMostUsedModel" class="mt-2 text-sm font-semibold text-slate-900 dark:text-slate-100 break-words" title="--">--</p>
+                <p id="statusMostUsedCount" class="text-[11px] text-slate-400 mt-1 dark:text-slate-500">0 requests</p>
+                <p class="text-[11px] text-slate-400 mt-1 dark:text-slate-500">Model with the highest request count</p>
+            </div>
+
+        </div>
+
+                <div class="grid gap-6 xl:grid-cols-[minmax(0,0.95fr),minmax(320px,0.75fr)]">
+                    <div class="space-y-6">
+                    <div class="surface overflow-hidden rounded-3xl">
+                        <div class="px-5 py-4 border-b border-slate-100 dark:border-slate-700">
+                            <h2 class="text-sm font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wider">Current Active Config</h2>
+                        </div>
+                        <div class="p-5">
+                            <pre id="currentConfig" class="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 p-4 font-mono text-[11px] text-slate-700 dark:bg-slate-950 dark:text-slate-400">Loading...</pre>
+                        </div>
+                    </div>
+                </div>
+                <div class="surface rounded-3xl p-6">
+                    <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400 dark:text-slate-500">Summary</p>
+                    <div class="mt-5 grid gap-3 sm:grid-cols-2">
+                        <div class="subtle-surface rounded-2xl p-4">
+                            <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Claude Request Endpoint</p>
+                            <p id="overviewClaudeRoute" class="mt-2 text-sm font-medium text-slate-800 dark:text-slate-100 break-all">--</p>
+                        </div>
+                        <div class="subtle-surface rounded-2xl p-4">
+                            <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Claude API Base URL</p>
+                            <p id="overviewClaudeBase" class="mt-2 text-sm font-medium text-slate-800 dark:text-slate-100 break-all">--</p>
+                        </div>
+                        <div class="subtle-surface rounded-2xl p-4">
+                            <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Codex Request Endpoint</p>
+                            <p id="overviewCodexRoute" class="mt-2 text-sm font-medium text-slate-800 dark:text-slate-100 break-all">--</p>
+                        </div>
+                        <div class="subtle-surface rounded-2xl p-4">
+                            <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Codex API Base URL</p>
+                            <p id="overviewCodexBase" class="mt-2 text-sm font-medium text-slate-800 dark:text-slate-100 break-all">--</p>
+                        </div>
+                        <div class="subtle-surface rounded-2xl p-4">
+                            <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Custom Provider Base URL</p>
+                            <p id="overviewCustomBase" class="mt-2 text-sm font-medium text-slate-800 dark:text-slate-100 break-all">--</p>
+                        </div>
+                        <div class="subtle-surface rounded-2xl p-4">
+                            <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Cline Base URL</p>
+                            <input type="text" id="overviewClineBaseUrl" readonly class="minimal-input mt-2 w-full rounded-xl px-3 py-2 font-mono text-xs text-slate-700 dark:text-slate-300">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            </section>
+
+            <section id="section-profiles" class="dashboard-section hidden">
+                <div class="surface overflow-hidden rounded-3xl">
+                    <div class="px-5 py-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center">
+                        <h2 class="text-sm font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wider">Provider Profiles</h2>
+                        <button onclick="loadModels()" class="minimal-button rounded-xl px-3 py-2 text-xs font-medium">Refresh Models</button>
+                    </div>
+                    <div class="p-5 space-y-4">
+                        
                         <!-- Claude Profile -->
-                        <div class="border-2 border-purple-200 rounded-lg p-4 bg-purple-50/30">
-                            <h3 class="font-bold text-purple-700 mb-3 flex items-center gap-2">
-                                <span>🤖</span> Claude Profile
-                            </h3>
-                            <div class="space-y-3">
+                        <div class="subtle-surface rounded-3xl p-5">
+                            <div class="mb-4 flex items-start justify-between gap-4">
                                 <div>
-                                    <label class="block text-xs font-medium text-gray-600">Model</label>
-                                    <select id="claudeModelSelect" onchange="onModelChange('claude')" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-sm">
+                                    <h3 class="text-sm font-semibold text-slate-900 dark:text-slate-100">Claude</h3>
+                                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Anthropic-compatible upstream routing.</p>
+                                </div>
+                                <span class="rounded-full border border-slate-200 dark:border-slate-700 px-2.5 py-1 text-[10px] text-slate-500 dark:text-slate-400">/v1/messages</span>
+                            </div>
+                            <div class="grid gap-3 md:grid-cols-2">
+                                <div>
+                                    <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">Public Alias</label>
+                                    <input type="text" id="claudePublicModel" class="minimal-input mt-1 block w-full rounded-xl p-2.5 text-sm font-mono" placeholder="claude-opus-4-6" oninput="onClaudeAliasChange()">
+                                    <p class="mt-1 text-[10px] text-slate-400 dark:text-slate-500">This is the Claude-facing alias Claude Desktop/Code should see.</p>
+                                </div>
+                                <div>
+                                    <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">Upstream Model</label>
+                                    <select id="claudeModelSelect" onchange="onModelChange('claude')" class="minimal-input mt-1 block w-full rounded-xl p-2.5 text-sm">
                                         <option value="">Select a model...</option>
                                     </select>
+                                    <p class="mt-1 text-[10px] text-slate-400 dark:text-slate-500">This is the provider model that actually does the work upstream.</p>
                                 </div>
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-600">Target URL</label>
-                                    <input type="text" id="claudeTargetUrl" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-xs">
+                                <div class="md:col-span-1">
+                                    <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">Target URL</label>
+                                    <input type="text" id="claudeTargetUrl" class="minimal-input mt-1 block w-full rounded-xl p-2.5 text-xs">
                                 </div>
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-600">API Key</label>
-                                    <input type="password" id="claudeApiKey" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-xs">
-                                </div>
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-600">Context Window</label>
-                                    <div class="flex gap-2">
-                                        <input type="text" id="claudeContextWindow" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-xs bg-gray-50" placeholder="Auto-detected" readonly>
-                                        <button onclick="refreshContextWindow('claude')" class="mt-1 px-2 py-1 text-xs bg-gray-200 rounded hover:bg-gray-300" title="Refresh from model registry">🔄</button>
+                                <div class="md:col-span-2">
+                                    <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">API Key</label>
+                                    <div class="mt-1 flex gap-2">
+                                        <input type="password" id="claudeApiKey" class="minimal-input block w-full rounded-xl p-2.5 text-xs">
+                                        <button type="button" onclick="toggleApiKeyVisibility('claudeApiKey', this)" class="minimal-button min-w-[44px] rounded-xl text-sm" title="Show or hide API key">👁</button>
                                     </div>
-                                    <p class="text-[10px] text-gray-400 mt-0.5">Auto-detected from model ID. Override in config if needed.</p>
                                 </div>
-                                <div class="flex gap-2 pt-1">
-                                    <button onclick="saveProfileConfig('claude')" class="flex-1 bg-purple-600 text-white text-xs px-3 py-2 rounded hover:bg-purple-700 transition">Save</button>
-                                    <button onclick="testProfileConfig('claude')" class="flex-1 bg-green-600 text-white text-xs px-3 py-2 rounded hover:bg-green-700 transition">Test</button>
+                                <div class="md:col-span-2">
+                                    <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">Context Window</label>
+                                    <div class="flex gap-2">
+                                        <input type="text" id="claudeContextWindow" class="minimal-input mt-1 block w-full rounded-xl p-2.5 text-xs bg-slate-50 dark:bg-slate-900" placeholder="Auto-detected" readonly>
+                                        <button onclick="refreshContextWindow('claude')" class="minimal-button mt-1 rounded-xl px-3 py-1 text-xs" title="Refresh">Refresh</button>
+                                    </div>
                                 </div>
+                                <div class="md:col-span-2 flex gap-2 pt-1">
+                                    <button onclick="saveProfileConfig('claude')" class="minimal-button primary flex-1 rounded-xl px-4 py-2.5 text-xs font-semibold">Save</button>
+                                    <button onclick="testProfileConfig('claude')" class="minimal-button flex-1 rounded-xl px-4 py-2.5 text-xs font-semibold">Test</button>
+                                </div>
+                                <p class="md:col-span-2 text-[11px] leading-5 text-slate-500 dark:text-slate-400">Claude-compatible providers use an Anthropic messages endpoint. MiniMax Anthropic compatibility uses `https://api.minimax.io/anthropic` with `/v1/messages`.</p>
                             </div>
                         </div>
 
                         <!-- Codex Profile -->
-                        <div class="border-2 border-blue-200 rounded-lg p-4 bg-blue-50/30">
-                            <h3 class="font-bold text-blue-700 mb-3 flex items-center gap-2">
-                                <span>💻</span> Codex Profile
-                            </h3>
-                            <div class="space-y-3">
+                        <div class="subtle-surface rounded-3xl p-5">
+                            <div class="mb-4 flex items-start justify-between gap-4">
                                 <div>
-                                    <label class="block text-xs font-medium text-gray-600">Model</label>
-                                    <select id="codexModelSelect" onchange="onModelChange('codex')" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-sm">
+                                    <h3 class="text-sm font-semibold text-slate-900 dark:text-slate-100">Codex</h3>
+                                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">OpenAI-compatible upstream routing.</p>
+                                </div>
+                                <span class="rounded-full border border-slate-200 dark:border-slate-700 px-2.5 py-1 text-[10px] text-slate-500 dark:text-slate-400">/v1/chat/completions</span>
+                            </div>
+                            <div class="grid gap-3 md:grid-cols-2">
+                                <div>
+                                    <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">Model</label>
+                                    <select id="codexModelSelect" onchange="onModelChange('codex')" class="minimal-input mt-1 block w-full rounded-xl p-2.5 text-sm">
                                         <option value="">Select a model...</option>
                                     </select>
                                 </div>
                                 <div>
-                                    <label class="block text-xs font-medium text-gray-600">Target URL</label>
-                                    <input type="text" id="codexTargetUrl" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-xs">
+                                    <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">Target URL</label>
+                                    <input type="text" id="codexTargetUrl" class="minimal-input mt-1 block w-full rounded-xl p-2.5 text-xs">
                                 </div>
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-600">API Key</label>
-                                    <input type="password" id="codexApiKey" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-xs">
-                                </div>
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-600">Context Window</label>
-                                    <div class="flex gap-2">
-                                        <input type="text" id="codexContextWindow" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-xs bg-gray-50" placeholder="Auto-detected" readonly>
-                                        <button onclick="refreshContextWindow('codex')" class="mt-1 px-2 py-1 text-xs bg-gray-200 rounded hover:bg-gray-300" title="Refresh from model registry">🔄</button>
+                                <div class="md:col-span-2">
+                                    <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">API Key</label>
+                                    <div class="mt-1 flex gap-2">
+                                        <input type="password" id="codexApiKey" class="minimal-input block w-full rounded-xl p-2.5 text-xs">
+                                        <button type="button" onclick="toggleApiKeyVisibility('codexApiKey', this)" class="minimal-button min-w-[44px] rounded-xl text-sm" title="Show or hide API key">👁</button>
                                     </div>
-                                    <p class="text-[10px] text-gray-400 mt-0.5">Auto-detected from model ID. Override in config if needed.</p>
                                 </div>
-                                <div class="flex gap-2 pt-1">
-                                    <button onclick="saveProfileConfig('codex')" class="flex-1 bg-blue-600 text-white text-xs px-3 py-2 rounded hover:bg-blue-700 transition">Save</button>
-                                    <button onclick="testProfileConfig('codex')" class="flex-1 bg-green-600 text-white text-xs px-3 py-2 rounded hover:bg-green-700 transition">Test</button>
+                                <div class="md:col-span-2">
+                                    <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">Context Window</label>
+                                    <div class="flex gap-2">
+                                        <input type="text" id="codexContextWindow" class="minimal-input mt-1 block w-full rounded-xl p-2.5 text-xs bg-slate-50 dark:bg-slate-900" placeholder="Auto-detected" readonly>
+                                        <button onclick="refreshContextWindow('codex')" class="minimal-button mt-1 rounded-xl px-3 py-1 text-xs" title="Refresh">Refresh</button>
+                                    </div>
+                                </div>
+                                <div class="md:col-span-2 flex gap-2 pt-1">
+                                    <button onclick="saveProfileConfig('codex')" class="minimal-button primary flex-1 rounded-xl px-4 py-2.5 text-xs font-semibold">Save</button>
+                                    <button onclick="testProfileConfig('codex')" class="minimal-button flex-1 rounded-xl px-4 py-2.5 text-xs font-semibold">Test</button>
                                 </div>
                             </div>
                         </div>
-                    </div>
 
-                    <!-- Custom Provider -->
-                    <div class="mt-6 p-4 bg-gradient-to-r from-emerald-50 to-teal-50 rounded-lg border border-emerald-200">
-                        <h3 class="text-sm font-bold text-emerald-700 mb-3 flex items-center gap-2">
-                            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd"></path></svg>
-                            Custom Provider
-                        </h3>
-                        <div class="space-y-3">
-                            <!-- Saved Providers -->
-                            <div>
-                                <label class="block text-xs font-medium text-gray-600 flex items-center gap-1">
-                                    ⭐ Saved Providers
-                                    <button onclick="saveCurrentBookmark()" class="ml-auto text-emerald-600 hover:text-emerald-800 text-xs font-bold" title="Save current provider">💾 Save</button>
-                                </label>
-                                <div class="flex gap-2 mt-1">
-                                    <select id="bookmarkSelect" onchange="selectBookmark(this.value)" class="flex-1 rounded-md border-gray-300 shadow-sm p-2 border text-xs">
-                                        <option value="">-- Select a saved provider --</option>
+                        <!-- Custom Provider -->
+                        <div class="subtle-surface rounded-3xl p-5">
+                            <div class="mb-4 flex items-start justify-between gap-4">
+                                <div>
+                                    <h3 class="text-sm font-semibold text-slate-900 dark:text-slate-100">Custom Provider</h3>
+                                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Fetch models once, then apply the selected route to Claude or Codex.</p>
+                                </div>
+                                <span class="rounded-full border border-slate-200 dark:border-slate-700 px-2.5 py-1 text-[10px] text-slate-500 dark:text-slate-400">Reusable source</span>
+                            </div>
+                            <div class="grid gap-3 md:grid-cols-2">
+                                <div>
+                                    <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase flex items-center justify-between">
+                                        <span>Saved Providers</span>
+                                        <button onclick="saveCurrentBookmark()" class="text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 text-[10px] font-semibold">Save</button>
+                                    </label>
+                                    <div class="flex gap-2 mt-1">
+                                        <select id="bookmarkSelect" onchange="selectBookmark(this.value)" class="minimal-input flex-1 rounded-xl p-2 text-xs">
+                                            <option value="">-- Select a saved provider --</option>
+                                        </select>
+                                        <button onclick="deleteSelectedBookmark()" class="minimal-button rounded-xl px-2.5 py-1 text-xs" title="Delete">Delete</button>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">API Base URL</label>
+                                    <input type="text" id="customBaseUrl" placeholder="https://api.example.com/v1" class="minimal-input mt-1 block w-full rounded-xl p-2.5 text-xs">
+                                </div>
+                                <div class="md:col-span-2">
+                                    <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">API Key</label>
+                                    <div class="mt-1 flex gap-2">
+                                        <input type="password" id="customApiKey" placeholder="sk-..." class="minimal-input block w-full rounded-xl p-2.5 text-xs">
+                                        <button type="button" onclick="toggleApiKeyVisibility('customApiKey', this)" class="minimal-button min-w-[44px] rounded-xl text-sm" title="Show or hide API key">👁</button>
+                                    </div>
+                                </div>
+                                <div class="md:col-span-2 flex gap-2">
+                                    <button onclick="fetchCustomModels()" class="minimal-button primary flex-1 rounded-xl px-3 py-2 text-xs font-semibold">Fetch Models</button>
+                                    <button onclick="testCustomProvider()" class="minimal-button flex-1 rounded-xl px-3 py-2 text-xs font-semibold">Test Source</button>
+                                </div>
+                                <div class="md:col-span-2">
+                                    <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">Model</label>
+                                    <select id="customModelSelect" class="minimal-input mt-1 block w-full rounded-xl p-2.5 text-sm">
+                                        <option value="">Enter URL & key, then click Fetch Models</option>
                                     </select>
-                                    <button onclick="deleteSelectedBookmark()" class="bg-red-100 text-red-600 hover:bg-red-200 px-2 py-1 rounded text-xs" title="Delete selected">🗑️</button>
+                                </div>
+                                <div class="md:col-span-2 flex gap-2 pt-1">
+                                    <button onclick="applyCustomModel('claude')" class="minimal-button flex-1 rounded-xl px-3 py-2 text-xs font-semibold">Apply to Claude</button>
+                                    <button onclick="applyCustomModel('codex')" class="minimal-button flex-1 rounded-xl px-3 py-2 text-xs font-semibold">Apply to Codex</button>
+                                </div>
+                                <div>
+                                    <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">Input Cost / 1M (USD)</label>
+                                    <input type="number" id="customInputCostPer1M" step="0.000001" min="0" class="minimal-input mt-1 block w-full rounded-xl p-2.5 text-xs" placeholder="0.00">
+                                </div>
+                                <div>
+                                    <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">Output Cost / 1M (USD)</label>
+                                    <input type="number" id="customOutputCostPer1M" step="0.000001" min="0" class="minimal-input mt-1 block w-full rounded-xl p-2.5 text-xs" placeholder="0.00">
                                 </div>
                             </div>
-                            <div>
-                                <label class="block text-xs font-medium text-gray-600">API Base URL</label>
-                                <input type="text" id="customBaseUrl" placeholder="https://api.example.com/v1" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-xs">
-                            </div>
-                            <div>
-                                <label class="block text-xs font-medium text-gray-600">API Key</label>
-                                <input type="password" id="customApiKey" placeholder="sk-..." class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-xs">
-                            </div>
-                            <div class="flex gap-2">
-                                <button onclick="fetchCustomModels()" class="flex-1 bg-emerald-600 text-white text-xs px-3 py-2 rounded hover:bg-emerald-700 transition">🔍 Fetch Models</button>
-                                <button onclick="testCustomProvider()" class="flex-1 bg-teal-600 text-white text-xs px-3 py-2 rounded hover:bg-teal-700 transition">🧪 Test</button>
-                            </div>
-                            <div>
-                                <label class="block text-xs font-medium text-gray-600">Model</label>
-                                <select id="customModelSelect" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-sm">
-                                    <option value="">Enter URL & key, then click Fetch Models</option>
-                                </select>
-                            </div>
-                            <div class="flex gap-2 pt-1">
-                                <button onclick="applyCustomModel('claude')" class="flex-1 bg-purple-500 text-white text-xs px-3 py-2 rounded hover:bg-purple-600 transition">Apply to Claude</button>
-                                <button onclick="applyCustomModel('codex')" class="flex-1 bg-blue-500 text-white text-xs px-3 py-2 rounded hover:bg-blue-600 transition">Apply to Codex</button>
-                            </div>
                         </div>
-                    </div>
 
-                    <!-- Cline Compatibility -->
-                    <div class="mt-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
-                        <h3 class="text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
-                            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M11 3a1 1 0 100 2h2.586l-6.293 6.293a1 1 0 101.414 1.414L15 6.414V9a1 1 0 102 0V4a1 1 0 00-1-1h-5z"></path><path d="M5 5a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-3a1 1 0 10-2 0v3H5V7h3a1 1 0 000-2H5z"></path></svg>
-                            Cline / Agent Configuration
-                        </h3>
-                        <div class="space-y-2">
-                            <p class="text-[10px] text-gray-500 uppercase font-bold">API Base URL</p>
-                            <code id="clineUrl" class="block bg-white p-2 rounded border text-xs text-indigo-600 break-all cursor-pointer hover:bg-indigo-50" title="Click to copy" onclick="copyToClipboard(this.innerText)">loading...</code>
-                            <p class="text-[10px] text-gray-500 mt-2 italic">Note: Set provider to 'OpenAI Compatible' in Cline settings.</p>
+                        <div class="subtle-surface rounded-3xl p-4">
+                            <h3 class="font-semibold text-slate-900 dark:text-slate-100 mb-2 text-sm">Cline / Agent Config</h3>
+                            <p class="text-[11px] text-slate-500 dark:text-slate-400 mb-1.5">API Base URL</p>
+                            <input type="text" id="clineBaseUrl" readonly class="minimal-input w-full rounded-xl p-2 text-xs text-slate-600 dark:text-slate-300 font-mono">
+                            <p class="text-[10px] text-slate-400 dark:text-slate-500 mt-1.5">Set provider to <span class="font-semibold text-slate-600 dark:text-slate-300">OpenAI Compatible</span> in Cline settings.</p>
                         </div>
-                    </div>
-
-                    <div id="status" class="hidden mt-4 p-4 rounded-md text-sm break-all"></div>
-                    
-                    <div class="mt-6 border-t pt-6">
-                        <h3 class="text-lg font-semibold mb-2">Current Active Config:</h3>
-                        <pre id="currentConfig" class="bg-gray-800 text-green-400 p-4 rounded text-xs overflow-x-auto"></pre>
                     </div>
                 </div>
-            </div>
+            </section>
 
-            <!-- Right Column: Request Traffic + File Activity -->
-            <div class="space-y-6">
-                <!-- Request Traffic -->
-                <div class="bg-white rounded-lg shadow-md p-6">
-                    <div class="flex justify-between items-center mb-4">
-                        <h2 class="text-lg font-bold text-gray-800 flex items-center gap-2">
-                            <svg class="w-5 h-5 text-indigo-600" fill="currentColor" viewBox="0 0 20 20"><path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zM8 7a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zM14 4a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z"></path></svg>
+            <section id="section-traffic" class="dashboard-section hidden">
+                <div class="surface overflow-hidden rounded-3xl">
+                    <div class="px-5 py-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center">
+                        <h2 class="text-sm font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                            <svg class="w-4 h-4 text-indigo-500" fill="currentColor" viewBox="0 0 20 20"><path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zM8 7a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zM14 4a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z"/></svg>
                             Request Traffic
                         </h2>
-                        <span class="text-xs text-gray-400">Auto-refreshing</span>
+                        <div class="flex gap-1 bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg">
+                            <button onclick="setPeriod('all')" data-period="all" class="period-btn text-[11px] px-3 py-1 rounded-md bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-medium shadow-sm transition">All</button>
+                            <button onclick="setPeriod('day')" data-period="day" class="period-btn text-[11px] px-3 py-1 rounded-md text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition">Day</button>
+                            <button onclick="setPeriod('week')" data-period="week" class="period-btn text-[11px] px-3 py-1 rounded-md text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition">Week</button>
+                            <button onclick="setPeriod('month')" data-period="month" class="period-btn text-[11px] px-3 py-1 rounded-md text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition">Month</button>
+                            <button onclick="setPeriod('year')" data-period="year" class="period-btn text-[11px] px-3 py-1 rounded-md text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition">Year</button>
+                        </div>
                     </div>
 
-                    <!-- Pending Requests -->
-                    <div id="pendingSection" class="hidden mb-4">
-                        <p class="text-xs font-bold text-amber-600 uppercase mb-2">Pending Requests</p>
+                    <div class="grid gap-3 px-5 py-4 border-b border-slate-100 dark:border-slate-700 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                        <div>
+                            <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">Request Log Limit</label>
+                            <input type="number" id="requestLogLimit" min="100" step="100" class="minimal-input mt-1 block w-full rounded-xl p-2.5 text-xs font-mono" placeholder="5000">
+                        </div>
+                        <div>
+                            <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">Pending Timeout (Minutes)</label>
+                            <input type="number" id="pendingTimeoutMinutes" min="1" step="1" class="minimal-input mt-1 block w-full rounded-xl p-2.5 text-xs font-mono" placeholder="10">
+                        </div>
+                        <div class="flex items-end">
+                            <button onclick="saveTrafficSettings()" class="minimal-button rounded-xl px-4 py-2.5 text-xs font-semibold w-full md:w-auto">Save Traffic Settings</button>
+                        </div>
+                        <p class="md:col-span-3 text-[11px] leading-5 text-slate-500 dark:text-slate-400">Use this if the request log grows too large or a bridge crash leaves requests stuck in pending. Stale pending items will be auto-closed as errors after the timeout.</p>
+                    </div>
+                    
+                    <!-- Pending -->
+                    <div id="pendingSection" class="hidden px-5 pt-4">
+                        <p class="text-[10px] font-bold text-amber-600 uppercase tracking-wider mb-2">Pending Requests</p>
                         <div id="pendingList" class="space-y-2"></div>
                     </div>
-
-                    <!-- Completed Requests Table -->
-                    <div class="overflow-x-auto">
+                    
+                    <!-- Table -->
+                    <div class="overflow-x-auto px-5 py-4">
                         <table class="w-full text-left text-sm">
                             <thead>
-                                <tr class="border-b border-gray-200">
-                                    <th class="pb-2 font-semibold text-gray-600 text-xs">Time</th>
-                                    <th class="pb-2 font-semibold text-gray-600 text-xs">Client</th>
-                                    <th class="pb-2 font-semibold text-gray-600 text-xs">Endpoint</th>
-                                    <th class="pb-2 font-semibold text-gray-600 text-xs">Model</th>
-                                    <th class="pb-2 font-semibold text-gray-600 text-xs">Duration</th>
-                                    <th class="pb-2 font-semibold text-gray-600 text-xs">Status</th>
+                                <tr class="border-b border-slate-200 dark:border-slate-700">
+                                    <th class="pb-3 font-semibold text-slate-500 dark:text-slate-400 text-[11px] uppercase tracking-wider">Time</th>
+                                    <th class="pb-3 font-semibold text-slate-500 dark:text-slate-400 text-[11px] uppercase tracking-wider">Client</th>
+                                    <th class="pb-3 font-semibold text-slate-500 dark:text-slate-400 text-[11px] uppercase tracking-wider">Type</th>
+                                    <th class="pb-3 font-semibold text-slate-500 dark:text-slate-400 text-[11px] uppercase tracking-wider">Endpoint</th>
+                                    <th class="pb-3 font-semibold text-slate-500 dark:text-slate-400 text-[11px] uppercase tracking-wider">Model</th>
+                                    <th class="pb-3 font-semibold text-slate-500 dark:text-slate-400 text-[11px] uppercase tracking-wider text-right">In / Out Tokens</th>
+                                    <th class="pb-3 font-semibold text-slate-500 dark:text-slate-400 text-[11px] uppercase tracking-wider text-right">Duration</th>
+                                    <th class="pb-3 font-semibold text-slate-500 dark:text-slate-400 text-[11px] uppercase tracking-wider text-center">Status</th>
                                 </tr>
                             </thead>
                             <tbody id="requestTable">
                                 <tr>
-                                    <td colspan="6" class="py-4 text-center text-gray-400 text-sm">No requests yet</td>
+                                    <td colspan="7" class="py-8 text-center text-slate-400 dark:text-slate-500 text-sm">No requests yet</td>
                                 </tr>
                             </tbody>
                         </table>
                     </div>
                 </div>
+            </section>
 
-                <!-- Live File Activity -->
-                <div class="bg-white rounded-lg shadow-md p-6">
-                    <h2 class="text-lg font-bold mb-4 text-gray-800">Live File Activity</h2>
-                    <div id="activityList" class="space-y-2 h-[300px] overflow-y-auto pr-2">
-                        <div class="text-gray-400 text-sm italic">Waiting for model activity...</div>
+            <section id="section-inspector" class="dashboard-section hidden space-y-6">
+                <div class="surface overflow-hidden rounded-3xl">
+                    <div class="px-5 py-4 border-b border-slate-100 dark:border-slate-700">
+                        <h2 class="text-sm font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wider">Live Activity</h2>
+                    </div>
+                    <div id="activityList" class="p-5 space-y-2 h-[260px] overflow-y-auto">
+                        <div class="text-slate-400 dark:text-slate-500 text-sm italic">Waiting for model activity...</div>
                     </div>
                 </div>
-
-                <!-- Request Inspector -->
-                <div class="bg-white rounded-lg shadow-md p-6">
-                    <div class="flex justify-between items-center mb-4">
-                        <h2 class="text-lg font-bold text-gray-800 flex items-center gap-2">
-                            <svg class="w-5 h-5 text-pink-600" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M3 5a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 15a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd"></path></svg>
+                <div class="surface overflow-hidden rounded-3xl">
+                    <div class="px-5 py-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center">
+                        <h2 class="text-sm font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                            <svg class="w-4 h-4 text-pink-500" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M3 5a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 15a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd"/></svg>
                             Request Inspector
                         </h2>
-                        <span class="text-xs text-gray-400">Click a request to expand</span>
+                        <span class="text-[10px] text-slate-400 dark:text-slate-500">Click to expand</span>
                     </div>
-                    <div id="inspectorList" class="space-y-3">
-                        <div class="text-gray-400 text-sm italic">Requests will appear here...</div>
+                    <div id="inspectorList" class="p-5 space-y-3">
+                        <div class="text-slate-400 dark:text-slate-500 text-sm italic">Requests will appear here...</div>
                     </div>
                 </div>
+            </section>
+
+        <footer class="mt-8 border-t border-slate-200 pt-6 dark:border-slate-800">
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                <div class="text-right">
+                    <p class="text-[10px] text-slate-400 dark:text-slate-500">Claudish Proxy v1.0</p>
+                    <p class="text-[10px] text-slate-300 dark:text-slate-500">Multi-client AI Gateway</p>
+                </div>
+            </div>
+        </footer>
+        </main>
+    </div>
+
+    <!-- ═══ STATUS TOAST ═══ -->
+    <div id="statusToast" class="fixed bottom-4 right-4 px-4 py-3 rounded-xl shadow-lg text-sm font-medium transition-all duration-300 opacity-0 translate-y-2 pointer-events-none z-50"></div>
+
+    <!-- ═══ TEST RESULT MODAL ═══ -->
+    <div id="testResultModal" class="fixed inset-0 z-50 hidden" onclick="if(event.target===this)closeTestResult()">
+        <div class="absolute inset-0 bg-black/50 backdrop-blur-sm"></div>
+        <div class="absolute inset-x-4 top-[10%] md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-[640px] max-h-[80vh] bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 flex flex-col">
+            <div class="flex items-center justify-between px-5 py-4 border-b border-slate-100 dark:border-slate-700">
+                <h3 id="testResultTitle" class="text-sm font-bold text-slate-700 dark:text-slate-200">Test Result</h3>
+                <div class="flex items-center gap-2">
+                    <button onclick="copyTestResult()" class="text-xs px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:bg-slate-600 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-300 font-medium transition">📋 Copy</button>
+                    <button onclick="closeTestResult()" class="text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:text-slate-300 dark:hover:text-slate-200 text-lg leading-none">&times;</button>
+                </div>
+            </div>
+            <div class="p-5 overflow-y-auto">
+                <pre id="testResultBody" class="text-xs font-mono bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-200 p-4 rounded-xl border border-slate-200 dark:border-slate-700 whitespace-pre-wrap break-words max-h-[50vh] overflow-y-auto"></pre>
             </div>
         </div>
     </div>
 
     <script>
         let allModels = [];
-        let lastClaudeTime = 0;
-        let lastCodexTime = 0;
-        let claudeCount = 0;
-        let codexCount = 0;
+        let currentPeriod = 'all';
+        let bookmarkList = [];
+        let inspectorData = [];
+        let expandedReqId = null;
+        let activeSection = localStorage.getItem('claudish-active-section') || 'overview';
+        let currentConfigState = {};
+        let latestStatsSnapshot = null;
+        let lastActivityRenderKey = '';
+        let lastRequestsRenderKey = '';
+        let lastStatsRenderKey = '';
+        let lastInspectorRenderKey = '';
+        let pollHandles = [];
+        let debugErrorCount = 0;
+        let liveStream = null;
+        let liveStreamGeneration = 0;
+
+        function sectionVisible(...sections) {
+            return sections.includes(activeSection);
+        }
+
+        function updateDebugStamp(kind, message) {
+            const idMap = {
+                requests: 'debugRequestsAt',
+                activity: 'debugActivityAt',
+                inspector: 'debugInspectorAt'
+            };
+            const el = document.getElementById(idMap[kind]);
+            if (!el) return;
+            const now = new Date();
+            const stamp = now.toLocaleTimeString();
+            el.innerText = message ? `${stamp} (${message})` : stamp;
+        }
+
+        function reportLiveError(scope, error) {
+            debugErrorCount += 1;
+            const countEl = document.getElementById('debugErrorCount');
+            const errEl = document.getElementById('debugLastError');
+            if (countEl) countEl.innerText = String(debugErrorCount);
+            if (errEl) {
+                errEl.classList.remove('hidden');
+                errEl.innerText = `${scope}: ${error?.message || error || 'unknown error'}`;
+            }
+            console.error(`[UI ${scope}]`, error);
+        }
+
+        function buildActivityRenderKey(data) {
+            if (!Array.isArray(data) || data.length === 0) return 'empty';
+            const first = data[0] || {};
+            return [data.length, first.time, first.type, first.detail].join('|');
+        }
+
+        function buildRequestsRenderKey(data) {
+            const firstCompleted = data?.completed?.[0] || {};
+            const pendingIds = (data?.pending || [])
+                .map(item => `${item.reqId || 'pending'}:${item.status || ''}:${Math.floor((item.elapsedMs || 0) / 1000)}`)
+                .join(',');
+            return [
+                data?.completed?.length || 0,
+                firstCompleted.reqId || '',
+                firstCompleted.status || '',
+                firstCompleted.durationMs || 0,
+                firstCompleted.totalTokens || 0,
+                pendingIds
+            ].join('|');
+        }
+
+        function buildStatsRenderKey(stats) {
+            return [
+                stats?.pendingRequests || 0,
+                stats?.totalRequests || 0,
+                stats?.totalInputTokens || 0,
+                stats?.totalOutputTokens || 0,
+                stats?.mostUsedModel || '',
+                stats?.mostUsedCount || 0
+            ].join('|');
+        }
+
+        function buildInspectorRenderKey(data) {
+            if (!Array.isArray(data) || data.length === 0) return 'empty';
+            return data.map(item => [
+                item.reqId,
+                item.status,
+                item.finishReason || '',
+                item.toolCalls?.length || 0,
+                item.thinking?.length || 0,
+                item.inputTokens || 0,
+                item.outputTokens || 0,
+                item.durationMs || 0,
+                item.responseBody ? prettyJson(item.responseBody).length : 0,
+                item.error ? '1' : '0'
+            ].join(':')).join('|');
+        }
+
+        function clearProfileContextState(profile) {
+            const field = document.getElementById(profile + 'ContextWindow');
+            const status = document.getElementById(profile + 'StatusContext');
+            if (field) field.value = '';
+            if (status) status.innerText = '--';
+            if (currentConfigState[profile]) {
+                delete currentConfigState[profile].contextWindow;
+                delete currentConfigState[profile].contextModelId;
+            }
+        }
+
+        const DEFAULT_CLAUDE_PUBLIC_ALIAS = 'claude-opus-4-6';
+        const DEFAULT_REQUEST_LOG_LIMIT = 5000;
+        const DEFAULT_PENDING_TIMEOUT_MINUTES = 10;
 
         async function loadModels() {
             const selects = ['claudeModelSelect', 'codexModelSelect'];
             selects.forEach(id => {
                 const el = document.getElementById(id);
-                if (el) el.innerHTML = '<option value="">Fetching live models...</option>';
+                if (el) el.innerHTML = '<option value="">Fetching models...</option>';
             });
             try {
-                console.log('[UI] Fetching models...');
-                const res = await fetch('/ui/models');
-                if (!res.ok) throw new Error('HTTP ' + res.status);
-                allModels = await res.json();
-                console.log('[UI] Fetched', allModels.length, 'models');
-                if (!Array.isArray(allModels)) throw new Error('Expected array, got ' + typeof allModels);
+                const [modelsRes, cfgRes] = await Promise.all([
+                    fetch('/ui/models'),
+                    fetch('/ui/config')
+                ]);
+                if (!modelsRes.ok) throw new Error('HTTP ' + modelsRes.status);
+                allModels = await modelsRes.json();
+                if (!Array.isArray(allModels)) throw new Error('Expected array');
                 selects.forEach(id => populateSelect(id, allModels));
-                
-                const cfgRes = await fetch('/ui/config');
                 const cfg = await cfgRes.json();
                 applyConfigToUI(cfg);
             } catch (e) {
@@ -311,249 +795,71 @@
                 showStatus('Model fetch failed: ' + e.message, 'bg-red-100 text-red-800');
                 selects.forEach(id => {
                     const el = document.getElementById(id);
-                    if (el) el.innerHTML = '<option value="">Error loading models</option>';
+                    if (el) el.innerHTML = '<option value="">Error loading</option>';
                 });
             }
         }
 
         const FALLBACK_MODELS = [
-            { id: 'minimax/minimax-m2.5:free', name: '[OpenRouter] minimax/minimax-m2.5:free', provider: 'OpenRouter', url: 'https://openrouter.ai/api/v1/chat/completions', base: 'https://openrouter.ai/api/v1', key: '' },
-            { id: 'inclusionai/ling-2.6-1t:free', name: '[OpenRouter] inclusionai/ling-2.6-1t:free', provider: 'OpenRouter', url: 'https://openrouter.ai/api/v1/chat/completions', base: 'https://openrouter.ai/api/v1', key: '' },
-            { id: 'google/gemini-2.0-flash-exp:free', name: '[OpenRouter] google/gemini-2.0-flash-exp:free', provider: 'OpenRouter', url: 'https://openrouter.ai/api/v1/chat/completions', base: 'https://openrouter.ai/api/v1', key: '' },
-            { id: 'tencent/hy3-preview:free', name: '[OpenRouter] tencent/hy3-preview:free', provider: 'OpenRouter', url: 'https://openrouter.ai/api/v1/chat/completions', base: 'https://openrouter.ai/api/v1', key: '' },
-            { id: 'meta-llama/llama-3.3-70b-instruct:free', name: '[OpenRouter] meta-llama/llama-3.3-70b-instruct:free', provider: 'OpenRouter', url: 'https://openrouter.ai/api/v1/chat/completions', base: 'https://openrouter.ai/api/v1', key: '' },
-            { id: 'deepseek/deepseek-chat:free', name: '[OpenRouter] deepseek/deepseek-chat:free', provider: 'OpenRouter', url: 'https://openrouter.ai/api/v1/chat/completions', base: 'https://openrouter.ai/api/v1', key: '' },
+            { id: 'minimax-m2.5-free', name: 'minimax-m2.5-free', provider: 'Fallback' },
+            { id: 'ling-2.6-flash-free', name: 'ling-2.6-flash-free', provider: 'Fallback' },
+            { id: 'hy3-preview-free', name: 'hy3-preview-free', provider: 'Fallback' },
+            { id: 'gemini-2.0-flash-exp-free', name: 'gemini-2.0-flash-exp-free', provider: 'Fallback' }
         ];
 
         function populateSelect(id, models) {
             const select = document.getElementById(id);
             if (!select) return;
-            select.innerHTML = '';
-            const list = (models && models.length > 0) ? models : FALLBACK_MODELS;
-            if (list.length === 0) {
-                select.innerHTML = '<option value="">No free models found</option>';
-                return;
-            }
-            list.forEach(m => {
+            const current = select.value;
+            select.innerHTML = '<option value="">Select a model...</option>';
+            models.forEach(m => {
                 const opt = document.createElement('option');
                 opt.value = m.id;
-                opt.innerText = m.name;
-                opt.dataset.url = m.url;
-                opt.dataset.key = m.key;
-                opt.dataset.base = m.base;
-                opt.dataset.provider = m.provider;
+                opt.innerText = m.name || m.id;
+                opt.dataset.url = m.url || '';
+                opt.dataset.key = m.key || '';
+                opt.dataset.base = m.base || '';
                 select.appendChild(opt);
             });
-        }
-
-        function applyConfigToUI(cfg) {
-            if (cfg.claude) {
-                setSelectValue('claudeModelSelect', cfg.claude.currentModel);
-                document.getElementById('claudeTargetUrl').value = cfg.claude.targetUrl || '';
-                document.getElementById('claudeApiKey').value = cfg.claude.apiKey || '';
-                document.getElementById('claudeStatusModel').innerText = cfg.claude.currentModel || 'unknown';
-                document.getElementById('claudeStatusProvider').innerText = extractProvider(cfg.claude.targetUrl);
-                document.getElementById('claudeContextWindow').value = cfg.claude.contextWindow ? formatTokenCount(cfg.claude.contextWindow) : 'Auto-detect';
-                document.getElementById('claudeStatusContext').innerText = cfg.claude.contextWindow ? formatTokenCount(cfg.claude.contextWindow) + ' ctx' : 'Auto-detect';
-            }
-            if (cfg.codex) {
-                setSelectValue('codexModelSelect', cfg.codex.currentModel);
-                document.getElementById('codexTargetUrl').value = cfg.codex.targetUrl || '';
-                document.getElementById('codexApiKey').value = cfg.codex.apiKey || '';
-                document.getElementById('codexStatusModel').innerText = cfg.codex.currentModel || 'unknown';
-                document.getElementById('codexStatusProvider').innerText = extractProvider(cfg.codex.targetUrl);
-                document.getElementById('codexContextWindow').value = cfg.codex.contextWindow ? formatTokenCount(cfg.codex.contextWindow) + ' tokens' : 'Auto-detect';
-                document.getElementById('codexStatusContext').innerText = cfg.codex.contextWindow ? formatTokenCount(cfg.codex.contextWindow) + ' ctx' : 'Auto-detect';
-            }
-            // Backward compatibility: old flat format
-            if (!cfg.claude && !cfg.codex && cfg.targetUrl) {
-                setSelectValue('claudeModelSelect', cfg.currentModel);
-                setSelectValue('codexModelSelect', cfg.currentModel);
-                document.getElementById('claudeTargetUrl').value = cfg.targetUrl;
-                document.getElementById('claudeApiKey').value = cfg.apiKey || '';
-                document.getElementById('codexTargetUrl').value = cfg.targetUrl;
-                document.getElementById('codexApiKey').value = cfg.apiKey || '';
-                document.getElementById('claudeStatusModel').innerText = cfg.currentModel || 'unknown';
-                document.getElementById('claudeStatusProvider').innerText = extractProvider(cfg.targetUrl);
-                document.getElementById('codexStatusModel').innerText = cfg.currentModel || 'unknown';
-                document.getElementById('codexStatusProvider').innerText = extractProvider(cfg.targetUrl);
-            }
-            // Restore custom provider if saved
-            if (cfg.customProvider) {
-                document.getElementById('customBaseUrl').value = cfg.customProvider.baseUrl || '';
-                document.getElementById('customApiKey').value = cfg.customProvider.apiKey || '';
-            }
-            loadBookmarks();
-            updateConfigDisplay(cfg);
-            updateClineInfo();
-            // Auto-detect context windows for currently selected models
-            if (cfg.claude && cfg.claude.currentModel) refreshContextWindow('claude');
-            if (cfg.codex && cfg.codex.currentModel) refreshContextWindow('codex');
-        }
-
-        function setSelectValue(id, value) {
-            const select = document.getElementById(id);
-            if (!select || !value) return;
-            // Check if the value exists in options
-            let found = false;
-            for (let i = 0; i < select.options.length; i++) {
-                if (select.options[i].value === value) {
-                    found = true;
-                    break;
-                }
-            }
-            if (found) {
-                select.value = value;
-            } else {
-                // Add a placeholder option for the current value
-                const opt = document.createElement('option');
-                opt.value = value;
-                opt.innerText = value;
-                select.insertBefore(opt, select.firstChild);
-                select.value = value;
-            }
-        }
-
-        function extractProvider(url) {
-            if (!url) return 'unknown';
-            try {
-                const host = new URL(url).hostname;
-                if (host.includes('kilo')) return 'Kilocode';
-                if (host.includes('opencode')) return 'Opencode';
-                if (host.includes('openrouter')) return 'OpenRouter';
-                if (host.includes('cline')) return 'Cline AI';
-                return host;
-            } catch { return 'unknown'; }
-        }
-
-        function updateClineInfo() {
-            const select = document.getElementById('codexModelSelect');
-            const opt = select.options[select.selectedIndex];
-            if (opt && opt.dataset.base) {
-                document.getElementById('clineUrl').innerText = opt.dataset.base;
-            }
-        }
-
-        async function loadActivity() {
-            try {
-                const res = await fetch('/ui/activity');
-                const data = await res.json();
-                const list = document.getElementById('activityList');
-                if (data.length === 0) return;
-                list.innerHTML = data.map(item => `
-                    <div class="p-2 border-b border-gray-100 flex items-start gap-3">
-                        <span class="text-[10px] text-gray-400 mt-1 font-mono">${item.time}</span>
-                        <div>
-                            <span class="text-xs font-bold ${item.type === 'READ' ? 'text-blue-600' : item.type === 'COMPACT' ? 'text-amber-600' : 'text-purple-600'} border px-1 rounded mr-2">${item.type}</span>
-                            <span class="text-sm font-mono break-all text-gray-700">${item.detail}</span>
-                        </div>
-                    </div>
-                `).join('');
-            } catch (e) { }
-        }
-
-        async function loadRequests() {
-            try {
-                const res = await fetch('/ui/requests');
-                const data = await res.json();
-                
-                document.getElementById('statusPending').innerText = data.pending.length;
-                document.getElementById('statusTotal').innerText = data.completed.length;
-
-                const pendingSection = document.getElementById('pendingSection');
-                const pendingList = document.getElementById('pendingList');
-                if (data.pending.length > 0) {
-                    pendingSection.classList.remove('hidden');
-                    pendingList.innerHTML = data.pending.map(r => `
-                        <div class="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-                            <span class="animate-pulse h-2 w-2 rounded-full bg-amber-500"></span>
-                            <span class="text-xs font-bold ${r.clientType === 'claude' ? 'text-purple-700' : 'text-blue-700'}">${r.clientType.toUpperCase()}</span>
-                            <span class="text-xs text-gray-600">${r.endpoint}</span>
-                            <span class="text-xs text-gray-400 ml-auto">${r.elapsedMs}ms</span>
-                        </div>
-                    `).join('');
-                } else {
-                    pendingSection.classList.add('hidden');
-                }
-
-                const tbody = document.getElementById('requestTable');
-                if (data.completed.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="6" class="py-4 text-center text-gray-400 text-sm">No requests yet</td></tr>';
-                } else {
-                    tbody.innerHTML = data.completed.map(r => {
-                        const isClaude = r.clientType === 'claude';
-                        const badgeColor = isClaude ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700';
-                        const statusIcon = r.status === 'success' ? '✅' : '❌';
-                        const endpointShort = r.endpoint.replace('/v1/', '');
-                        const errorTooltip = r.error ? `title="${r.error.replace(/"/g, '&quot;')}"` : '';
-                        return `
-                            <tr class="border-b border-gray-100 hover:bg-gray-50" ${errorTooltip}>
-                                <td class="py-2 text-xs text-gray-500 font-mono">${r.time}</td>
-                                <td class="py-2"><span class="text-[10px] font-bold px-1.5 py-0.5 rounded ${badgeColor}">${r.clientType.toUpperCase()}</span></td>
-                                <td class="py-2 text-xs text-gray-600">${endpointShort}</td>
-                                <td class="py-2 text-xs text-gray-500 truncate max-w-[100px]" title="${r.model}">${r.model}</td>
-                                <td class="py-2 text-xs text-gray-500 font-mono">${r.durationMs}ms</td>
-                                <td class="py-2 text-xs">${statusIcon}</td>
-                            </tr>
-                        `;
-                    }).join('');
-                }
-
-                const now = Date.now();
-                data.completed.forEach(r => {
-                    const t = parseTime(r.time);
-                    if (r.clientType === 'claude') {
-                        if (t > lastClaudeTime) lastClaudeTime = t;
-                        claudeCount++;
-                    } else {
-                        if (t > lastCodexTime) lastCodexTime = t;
-                        codexCount++;
-                    }
-                });
-
-                updateClientCard('claude', lastClaudeTime, claudeCount);
-                updateClientCard('codex', lastCodexTime, codexCount);
-            } catch (e) { }
-        }
-
-        function parseTime(timeStr) {
-            const [h, m, s] = timeStr.split(':').map(Number);
-            const now = new Date();
-            return new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, s).getTime();
-        }
-
-        function updateClientCard(type, lastTime, count) {
-            const isActive = (Date.now() - lastTime) < 60000;
-            const card = document.getElementById(type + 'Card');
-            const badge = document.getElementById(type + 'Badge');
-            const last = document.getElementById(type + 'Last');
-
-            if (lastTime > 0) {
-                if (isActive) {
-                    card.classList.remove('border-gray-200');
-                    card.classList.add(type === 'claude' ? 'border-purple-400' : 'border-blue-400', 'bg-indigo-50/30');
-                    badge.className = 'inline-block mt-2 px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-bold';
-                    badge.innerText = 'Active';
-                } else {
-                    card.classList.remove('border-purple-400', 'border-blue-400', 'bg-indigo-50/30');
-                    card.classList.add('border-gray-200');
-                    badge.className = 'inline-block mt-2 px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-500';
-                    badge.innerText = 'Idle';
-                }
-                last.innerText = count + ' request' + (count !== 1 ? 's' : '') + ' total';
-            }
+            if (current) select.value = current;
         }
 
         function onModelChange(profile) {
             const select = document.getElementById(profile + 'ModelSelect');
             const opt = select.options[select.selectedIndex];
-            if (opt && opt.dataset.url) {
-                document.getElementById(profile + 'TargetUrl').value = opt.dataset.url;
-                document.getElementById(profile + 'ApiKey').value = opt.dataset.key;
-                if (profile === 'codex') updateClineInfo();
+            if (!opt || !opt.value) return;
+            if (opt.dataset.base || opt.dataset.url) {
+                document.getElementById(profile + 'TargetUrl').value = normalizeTargetUrlForProfile(profile, opt.dataset.base || opt.dataset.url);
             }
-            // Auto-detect context window for the selected model
+            // Only auto-fill API key if field is empty — preserve user-edited keys
+            const apiKeyField = document.getElementById(profile + 'ApiKey');
+            if (opt.dataset.key && !apiKeyField.value.trim()) {
+                apiKeyField.value = opt.dataset.key;
+            }
+            const statusModel = profile === 'claude'
+                ? getClaudePublicAliasValue()
+                : opt.value;
+            document.getElementById(profile + 'StatusModel').innerText = statusModel;
+            document.getElementById(profile + 'StatusProvider').innerText = extractProvider(opt.dataset.base || opt.dataset.url);
+            syncSummaryFromUI();
             refreshContextWindow(profile);
+        }
+
+        function getClaudePublicAliasValue() {
+            const input = document.getElementById('claudePublicModel');
+            return (input?.value || '').trim() || DEFAULT_CLAUDE_PUBLIC_ALIAS;
+        }
+
+        function onClaudeAliasChange() {
+            const alias = getClaudePublicAliasValue();
+            const statusModel = document.getElementById('claudeStatusModel');
+            const statusAlias = document.getElementById('claudeStatusAlias');
+            if (statusModel) statusModel.innerText = alias;
+            if (statusAlias) {
+                statusAlias.innerText = 'Public alias: ' + alias;
+                statusAlias.title = alias;
+            }
+            syncSummaryFromUI();
         }
 
         async function refreshContextWindow(profile) {
@@ -562,98 +868,356 @@
             try {
                 const res = await fetch('/ui/context?model=' + encodeURIComponent(model));
                 const data = await res.json();
-                const display = formatTokenCount(data.inputTokens) + ' tokens';
-                document.getElementById(profile + 'ContextWindow').value = display;
-                document.getElementById(profile + 'StatusContext').innerText = formatTokenCount(data.inputTokens) + ' ctx';
+                const inputTokens = data.inputTokens || 32768;
+                document.getElementById(profile + 'ContextWindow').value = inputTokens.toLocaleString() + ' tokens';
+                document.getElementById(profile + 'StatusContext').innerText = formatTokenCount(inputTokens) + ' ctx';
             } catch (e) {
-                document.getElementById(profile + 'ContextWindow').value = 'Auto-detect';
+                console.error('Context window refresh failed:', e);
             }
         }
 
         function formatTokenCount(n) {
-            if (!n) return '0';
-            if (n >= 1000000) return (n / 1048576).toFixed(1) + 'M';
-            if (n >= 1000) return (n / 1024).toFixed(1) + 'K';
+            if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+            if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
             return n.toString();
         }
 
-        function copyToClipboard(text) {
-            navigator.clipboard.writeText(text);
-            alert('Copied to clipboard!');
+        function formatExactNumber(n) {
+            return Number(n || 0).toLocaleString();
         }
 
-        async function saveProfileConfig(profile) {
-            const data = {
-                profile: profile,
-                currentModel: document.getElementById(profile + 'ModelSelect').value,
-                targetUrl: document.getElementById(profile + 'TargetUrl').value,
-                apiKey: document.getElementById(profile + 'ApiKey').value
-            };
-            // Also save custom provider settings to config root
-            const customBaseUrl = document.getElementById('customBaseUrl').value;
-            const customApiKey = document.getElementById('customApiKey').value;
-            if (customBaseUrl) {
-                data.customProvider = {
-                    baseUrl: customBaseUrl,
-                    apiKey: customApiKey
+        function formatUsd(value) {
+            const amount = Number(value || 0);
+            return '$' + amount.toLocaleString(undefined, {
+                minimumFractionDigits: amount >= 1 ? 2 : 4,
+                maximumFractionDigits: amount >= 1 ? 2 : 4
+            });
+        }
+
+        function getLiveProfileRate(profile, direction) {
+            const suffix = direction === 'in' ? 'InCost' : 'OutCost';
+            const field = document.getElementById('overview' + profile.charAt(0).toUpperCase() + profile.slice(1) + suffix);
+            const value = Number(field?.value || 0);
+            return Number.isFinite(value) ? value : 0;
+        }
+
+        function getDisplayCosts(stats) {
+            const profileStats = stats?.profileStats || {};
+            const hasProfileBreakdown = ['claude', 'codex'].some(profile => {
+                const entry = profileStats[profile];
+                return entry && ((entry.inputTokens || 0) > 0 || (entry.outputTokens || 0) > 0);
+            });
+
+            if (!hasProfileBreakdown) {
+                return {
+                    inputCost: Number(stats?.estimatedInputCost || 0),
+                    outputCost: Number(stats?.estimatedOutputCost || 0),
+                    totalCost: Number(stats?.estimatedTotalCost || 0)
                 };
             }
-            const res = await fetch('/ui/save', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(data)
+
+            let inputCost = 0;
+            let outputCost = 0;
+            ['claude', 'codex'].forEach(profile => {
+                const entry = profileStats[profile] || {};
+                inputCost += ((entry.inputTokens || 0) / 1000000) * getLiveProfileRate(profile, 'in');
+                outputCost += ((entry.outputTokens || 0) / 1000000) * getLiveProfileRate(profile, 'out');
             });
-            if (res.ok) {
-                showStatus(profile.toUpperCase() + ' profile saved!', 'bg-green-100 text-green-800');
-                document.getElementById(profile + 'StatusModel').innerText = data.currentModel;
-                document.getElementById(profile + 'StatusProvider').innerText = extractProvider(data.targetUrl);
+
+            return {
+                inputCost,
+                outputCost,
+                totalCost: inputCost + outputCost
+            };
+        }
+
+        function rerenderCostSummary() {
+            if (!latestStatsSnapshot) return;
+            const costs = getDisplayCosts(latestStatsSnapshot);
+            document.getElementById('statusTotalCost').innerText = formatUsd(costs.totalCost);
+            document.getElementById('statusCostBreakdown').innerText = 'In ' + formatUsd(costs.inputCost) + ' / Out ' + formatUsd(costs.outputCost);
+        }
+
+        function extractProvider(url) {
+            if (!url) return 'Unknown';
+            try {
+                const host = new URL(url).hostname;
+                if (host.includes('kilo')) return 'Kilocode';
+                if (host.includes('opencode')) return 'Opencode';
+                if (host.includes('openrouter')) return 'OpenRouter';
+                if (host.includes('nvidia')) return 'NVIDIA';
+                if (host.includes('localhost') || host.includes('127.0.0.1')) return 'Local';
+                return host.split('.')[0];
+            } catch { return 'Custom'; }
+        }
+
+        function extractApiBaseUrl(url) {
+            if (!url) return '--';
+            try {
+                const parsed = new URL(url);
+                return parsed.href
+                    .replace(/\/v1\/messages$/i, '')
+                    .replace(/\/v1\/chat\/completions$/i, '')
+                    .replace(/\/v1\/responses$/i, '')
+                    .replace(/\/v1\/text\/chatcompletion_v2$/i, '')
+                    .replace(/\/chat\/completions$/i, '')
+                    .replace(/\/responses$/i, '')
+                    .replace(/\/messages$/i, '');
+            } catch {
+                return url;
             }
         }
 
-        async function testProfileConfig(profile) {
-            const btn = event.target;
-            const originalText = btn.innerText;
-            btn.innerText = 'Testing...';
-            btn.disabled = true;
-            const data = {
-                model: document.getElementById(profile + 'ModelSelect').value,
-                targetUrl: document.getElementById(profile + 'TargetUrl').value,
-                apiKey: document.getElementById(profile + 'ApiKey').value
-            };
+        function stripKnownEndpointSuffixes(url) {
+            return (url || '')
+                .replace(/\/v1\/messages$/i, '')
+                .replace(/\/messages$/i, '')
+                .replace(/\/v1\/chat\/completions$/i, '')
+                .replace(/\/chat\/completions$/i, '')
+                .replace(/\/v1\/responses$/i, '')
+                .replace(/\/responses$/i, '')
+                .replace(/\/v1\/models$/i, '')
+                .replace(/\/models$/i, '');
+        }
+
+        function normalizeTargetUrlForProfile(profile, targetUrl) {
+            if (!targetUrl) return '';
             try {
-                const res = await fetch('/ui/test', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data)
-                });
-                const result = await res.json();
-                if (result.success) {
-                    showStatus(profile.toUpperCase() + ' TEST SUCCESS: ' + result.content, 'bg-green-100 text-green-800');
-                } else {
-                    showStatus(profile.toUpperCase() + ' TEST FAILED: ' + result.error, 'bg-red-100 text-red-800');
+                const parsed = new URL(stripKnownEndpointSuffixes(targetUrl));
+                const root = `${parsed.protocol}//${parsed.host}`;
+                const path = parsed.pathname.replace(/\/$/, '');
+
+                if (profile === 'claude') {
+                    if (parsed.hostname === 'api.minimax.io') return `${root}/anthropic/v1/messages`;
+                    if (parsed.hostname === 'api.anthropic.com') return `${root}/v1/messages`;
+                    if (/\/anthropic$/i.test(path)) return `${root}${path}/v1/messages`;
+                    if (/\/v\d+$/i.test(path)) return `${root}${path.replace(/\/v\d+$/i, '')}/v1/messages`;
+                    return `${root}${path}/v1/messages`;
+                }
+
+                if (parsed.hostname === 'api.minimax.io') return `${root}/v1/text/chatcompletion_v2`;
+                if (/\/v\d+$/i.test(path)) return `${root}${path}/chat/completions`;
+                return `${root}${path}/v1/chat/completions`;
+            } catch {
+                return targetUrl;
+            }
+        }
+
+        function detectCustomProviderProfile(baseUrl) {
+            const normalized = (baseUrl || '').toLowerCase();
+            if (normalized.includes('/anthropic') || normalized.includes('anthropic.com')) return 'claude';
+            return 'codex';
+        }
+
+        function getPeriodQueryString(period = currentPeriod) {
+            const params = new URLSearchParams();
+            params.set('period', period);
+            params.set('tzOffsetMinutes', String(new Date().getTimezoneOffset()));
+            let weekStartsOn = 0;
+            try {
+                const firstDay = new Intl.Locale(navigator.language).weekInfo?.firstDay;
+                if (typeof firstDay === 'number') {
+                    weekStartsOn = firstDay % 7;
                 }
             } catch (e) {
-                showStatus('Error: ' + e.message, 'bg-red-100 text-red-800');
-            } finally {
-                btn.innerText = originalText;
-                btn.disabled = false;
+                // Default to Sunday when locale week metadata is unavailable.
+            }
+            params.set('weekStartsOn', String(weekStartsOn));
+            return params.toString();
+        }
+
+        function setPeriod(period) {
+            currentPeriod = period;
+            document.querySelectorAll('.period-btn').forEach(btn => {
+                btn.classList.remove('bg-white', 'dark:bg-slate-700', 'dark:bg-slate-800', 'text-slate-700', 'dark:text-slate-200', 'shadow-sm');
+                btn.classList.add('text-slate-500', 'dark:text-slate-400');
+            });
+            document.querySelectorAll(`.period-btn[data-period="${period}"]`).forEach(activeBtn => {
+                activeBtn.classList.remove('text-slate-500', 'dark:text-slate-400');
+                activeBtn.classList.add('bg-white', 'dark:bg-slate-700', 'text-slate-700', 'dark:text-slate-200', 'shadow-sm');
+            });
+            reconnectSSE();
+            loadRequests();
+            loadInspector();
+        }
+
+        async function loadRequests() {
+            try {
+                const [reqRes, statsRes] = await Promise.all([
+                    fetch('/ui/requests?' + getPeriodQueryString(currentPeriod), { cache: 'no-store' }),
+                    fetch('/ui/stats?' + getPeriodQueryString(currentPeriod), { cache: 'no-store' })
+                ]);
+                if (!reqRes.ok) throw new Error('Requests HTTP ' + reqRes.status);
+                if (!statsRes.ok) throw new Error('Stats HTTP ' + statsRes.status);
+                const data = await reqRes.json();
+                const stats = await statsRes.json();
+                renderStats(stats);
+                renderPending(data.pending || []);
+                renderCompleted(data.completed || []);
+                updateLiveProfileAliases(data.pending || [], data.completed || []);
+                updateDebugStamp('requests', `${stats.pendingRequests} pending`);
+            } catch (e) { reportLiveError('requests', e); }
+        }
+
+        function renderStats(stats) {
+            latestStatsSnapshot = stats;
+            document.getElementById('statusPending').innerText = formatExactNumber(stats.pendingRequests);
+            document.getElementById('statusTotal').innerText = formatExactNumber(stats.totalRequests);
+            document.getElementById('statusInputTokens').innerText = formatExactNumber(stats.totalInputTokens);
+            document.getElementById('statusOutputTokens').innerText = formatExactNumber(stats.totalOutputTokens);
+            rerenderCostSummary();
+
+            const mostUsedEl = document.getElementById('statusMostUsedModel');
+            const mostUsedCountEl = document.getElementById('statusMostUsedCount');
+            if (stats.mostUsedModel) {
+                mostUsedEl.innerText = stats.mostUsedModel.split('/').pop();
+                mostUsedEl.title = stats.mostUsedModel;
+                mostUsedCountEl.innerText = stats.mostUsedCount + ' request' + (stats.mostUsedCount !== 1 ? 's' : '');
+            } else {
+                mostUsedEl.innerText = '--';
+                mostUsedEl.title = '--';
+                mostUsedCountEl.innerText = '0 requests';
+            }
+
+        }
+
+        function updateLiveProfileAliases(pending, completed) {
+            const claudeEntries = [...(pending || []), ...(completed || [])]
+                .filter(item => item && item.clientType === 'claude' && item.model)
+                .sort((a, b) => {
+                    const aTime = Number(a.timestamp || 0) || Date.parse(a.date || '') || 0;
+                    const bTime = Number(b.timestamp || 0) || Date.parse(b.date || '') || 0;
+                    return bTime - aTime;
+                });
+            const latestClaudeModel = claudeEntries[0]?.model || '--';
+            const aliasEl = document.getElementById('claudeStatusAlias');
+            if (aliasEl) {
+                const configuredAlias = getClaudePublicAliasValue();
+                const liveLabel = latestClaudeModel && latestClaudeModel !== '--' && latestClaudeModel !== configuredAlias
+                    ? `${configuredAlias} (live: ${latestClaudeModel})`
+                    : configuredAlias;
+                aliasEl.innerText = 'Public alias: ' + liveLabel;
+                aliasEl.title = liveLabel;
             }
         }
 
-        function showStatus(text, classes) {
-            const el = document.getElementById('status');
-            el.className = 'mt-4 p-4 rounded-md ' + classes;
-            el.innerText = text;
-            el.classList.remove('hidden');
+        function syncCostToProfile(profile, type) {
+            const overviewId = 'overview' + profile.charAt(0).toUpperCase() + profile.slice(1) + (type === 'in' ? 'InCost' : 'OutCost');
+            const profileId = profile + (type === 'in' ? 'InputCostPer1M' : 'OutputCostPer1M');
+            const overviewVal = document.getElementById(overviewId).value;
+            const profileEl = document.getElementById(profileId);
+            if (profileEl) profileEl.value = overviewVal;
+            rerenderCostSummary();
         }
 
-        function updateConfigDisplay(cfg) {
-            document.getElementById('currentConfig').innerText = JSON.stringify(cfg, null, 2);
+        function syncProfileToOverview(profile) {
+            const profileInEl = document.getElementById(profile + 'InputCostPer1M');
+            const profileOutEl = document.getElementById(profile + 'OutputCostPer1M');
+            const overviewInEl = document.getElementById('overview' + profile.charAt(0).toUpperCase() + profile.slice(1) + 'InCost');
+            const overviewOutEl = document.getElementById('overview' + profile.charAt(0).toUpperCase() + profile.slice(1) + 'OutCost');
+            if (profileInEl && overviewInEl) overviewInEl.value = profileInEl.value || '';
+            if (profileOutEl && overviewOutEl) overviewOutEl.value = profileOutEl.value || '';
         }
 
-        // ── Bookmarked Providers ──
-        let bookmarkList = [];
+        function renderPending(pending) {
+            const pendingSection = document.getElementById('pendingSection');
+            const pendingList = document.getElementById('pendingList');
+            if (pending.length > 0) {
+                pendingSection.classList.remove('hidden');
+                pendingList.innerHTML = pending.map(r => `
+                    <div class="flex items-center gap-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 rounded-lg px-3 py-2">
+                        <span class="inline-block h-2 w-2 rounded-full bg-amber-400 animate-pulse"></span>
+                        <span class="text-xs font-bold ${r.clientType === 'claude' ? 'text-purple-700' : 'text-blue-700'}">${r.clientType.toUpperCase()}</span>
+                        <span class="text-xs text-slate-600 dark:text-slate-300">${r.endpoint}</span>
+                        <span class="text-xs text-slate-400 dark:text-slate-500 ml-auto font-mono">${r.elapsedMs}ms</span>
+                    </div>
+                `).join('');
+            } else {
+                pendingSection.classList.add('hidden');
+            }
+        }
 
+        function renderCompleted(completed) {
+            const tbody = document.getElementById('requestTable');
+            if (completed.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="8" class="py-8 text-center text-slate-400 dark:text-slate-500 text-sm">No requests yet</td></tr>';
+                return;
+            }
+            tbody.innerHTML = completed.slice(0, 50).map(r => {
+                const isClaude = r.clientType === 'claude';
+                const badgeColor = isClaude ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300' : 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300';
+                const statusIcon = r.status === 'success' || r.status === 'completed' ? '✅' : '❌';
+                const endpointShort = r.endpoint.replace('/v1/', '');
+                const errorTooltip = r.error ? `title="${r.error.replace(/"/g, '&quot;')}"` : '';
+                const inTokens = r.inputTokens || 0;
+                const outTokens = r.outputTokens || 0;
+                const tokenText = (inTokens > 0 || outTokens > 0) 
+                    ? `<span class="text-indigo-600 dark:text-indigo-400">${formatTokenCount(inTokens)}</span> <span class="text-slate-400 dark:text-slate-500 text-[10px]">/</span> <span class="text-emerald-600 dark:text-emerald-400">${formatTokenCount(outTokens)}</span>` 
+                    : '- / -';
+
+                const typeColors = {
+                    'Chat': 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800',
+                    'System': 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700',
+                    'Tool Use': 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800',
+                    'Multi-turn': 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800',
+                    'unknown': 'bg-slate-50 dark:bg-slate-800 text-slate-400 dark:text-slate-500 border border-slate-200 dark:border-slate-700'
+                };
+                const typeColor = typeColors[r.requestType] || typeColors['unknown'];
+                const typeLabel = r.requestType || 'unknown';
+
+                return `
+                    <tr class="border-b border-slate-50 dark:border-slate-800 hover-row" ${errorTooltip}>
+                        <td class="py-2.5 text-xs text-slate-500 dark:text-slate-400 font-mono">${r.time}</td>
+                        <td class="py-2.5"><span class="text-[10px] font-bold px-2 py-0.5 rounded-md ${badgeColor}">${r.clientType.toUpperCase()}</span></td>
+                        <td class="py-2.5"><span class="text-[10px] font-medium px-1.5 py-0.5 rounded ${typeColor}">${typeLabel}</span></td>
+                        <td class="py-2.5 text-xs text-slate-600 dark:text-slate-300">${endpointShort}</td>
+                        <td class="py-2.5 text-xs text-slate-500 dark:text-slate-400 truncate max-w-[120px]" title="${r.model}">${r.model}</td>
+                        <td class="py-2.5 text-xs font-mono text-right" title="Total: ${r.totalTokens || 0}">${tokenText}</td>
+                        <td class="py-2.5 text-xs text-slate-500 dark:text-slate-400 font-mono text-right">${r.durationMs}ms</td>
+                        <td class="py-2.5 text-xs text-center">${statusIcon}</td>
+                    </tr>
+                `;
+            }).join('');
+
+        }
+
+
+
+        async function loadActivity() {
+            try {
+                const res = await fetch('/ui/activity', { cache: 'no-store' });
+                if (!res.ok) throw new Error('Activity HTTP ' + res.status);
+                const data = await res.json();
+                renderActivity(data);
+                updateDebugStamp('activity', `${data.length} rows`);
+            } catch (e) { reportLiveError('activity', e); }
+        }
+
+        function renderActivity(data) {
+            const container = document.getElementById('activityList');
+            if (data.length === 0) {
+                container.innerHTML = '<div class="text-slate-400 dark:text-slate-500 text-sm italic">Waiting for model activity...</div>';
+                return;
+            }
+            const typeColors = {
+                SEARCH: 'text-orange-600 bg-orange-50',
+                READ: 'text-cyan-600 bg-cyan-50 dark:bg-cyan-900/20',
+                AGENT: 'text-purple-600 bg-purple-50 dark:bg-purple-900/20',
+                COMPACT: 'text-amber-600 bg-amber-50 dark:bg-amber-900/20'
+            };
+            container.innerHTML = data.slice(0, 30).map(item => {
+                const color = typeColors[item.type] || 'text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-900';
+                return `
+                    <div class="flex items-center gap-2 text-xs py-1 border-b border-slate-50 last:border-0">
+                        <span class="font-bold px-1.5 py-0.5 rounded ${color}">${item.type}</span>
+                        <span class="text-slate-600 dark:text-slate-300 flex-1 truncate">${item.detail}</span>
+                        <span class="text-slate-300 dark:text-slate-500 font-mono text-[10px]">${item.time}</span>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // ── Bookmarks ──
         async function loadBookmarks() {
             try {
                 const res = await fetch('/ui/bookmarks');
@@ -666,9 +1230,7 @@
                     opt.innerText = b.name;
                     select.appendChild(opt);
                 });
-            } catch (e) {
-                console.error('Failed to load bookmarks:', e);
-            }
+            } catch (e) { console.error('Failed to load bookmarks:', e); }
         }
 
         function selectBookmark(name) {
@@ -676,7 +1238,8 @@
             if (bookmark) {
                 document.getElementById('customBaseUrl').value = bookmark.baseUrl || '';
                 document.getElementById('customApiKey').value = bookmark.apiKey || '';
-                // Clear model select since we haven't fetched for this bookmark yet
+                document.getElementById('customInputCostPer1M').value = bookmark.inputCostPer1M || '';
+                document.getElementById('customOutputCostPer1M').value = bookmark.outputCostPer1M || '';
                 document.getElementById('customModelSelect').innerHTML = '<option value="">Click Fetch Models to load</option>';
                 showStatus(`Loaded bookmark: ${bookmark.name}`, 'bg-blue-100 text-blue-800');
             }
@@ -685,42 +1248,35 @@
         async function saveCurrentBookmark() {
             const baseUrl = document.getElementById('customBaseUrl').value.trim();
             const apiKey = document.getElementById('customApiKey').value.trim();
-            if (!baseUrl) {
-                showStatus('Enter a base URL first', 'bg-red-100 text-red-800');
-                return;
-            }
+            if (!baseUrl) { showStatus('Enter a base URL first', 'bg-red-100 text-red-800'); return; }
             const name = prompt('Name this provider bookmark:', extractProvider(baseUrl) || 'My Provider');
             if (!name) return;
             try {
                 const res = await fetch('/ui/bookmarks', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name, baseUrl, apiKey })
+                    body: JSON.stringify({
+                        name,
+                        baseUrl,
+                        apiKey,
+                        inputCostPer1M: document.getElementById('customInputCostPer1M').value || 0,
+                        outputCostPer1M: document.getElementById('customOutputCostPer1M').value || 0
+                    })
                 });
                 const data = await res.json();
                 if (data.success) {
                     bookmarkList = data.bookmarks;
                     loadBookmarks();
-                    // Select the newly saved bookmark
-                    setTimeout(() => {
-                        document.getElementById('bookmarkSelect').value = name;
-                    }, 100);
+                    setTimeout(() => { document.getElementById('bookmarkSelect').value = name; }, 100);
                     showStatus(`Bookmark "${name}" saved!`, 'bg-green-100 text-green-800');
-                } else {
-                    showStatus(data.error || 'Failed to save', 'bg-red-100 text-red-800');
                 }
-            } catch (e) {
-                showStatus('Error saving bookmark: ' + e.message, 'bg-red-100 text-red-800');
-            }
+            } catch (e) { showStatus('Error saving bookmark: ' + e.message, 'bg-red-100 text-red-800'); }
         }
 
         async function deleteSelectedBookmark() {
             const select = document.getElementById('bookmarkSelect');
             const name = select.value;
-            if (!name) {
-                showStatus('Select a bookmark to delete', 'bg-yellow-100 text-yellow-800');
-                return;
-            }
+            if (!name) { showStatus('Select a bookmark to delete', 'bg-yellow-100 text-yellow-800'); return; }
             if (!confirm(`Delete bookmark "${name}"?`)) return;
             try {
                 const res = await fetch('/ui/bookmarks/' + encodeURIComponent(name), { method: 'DELETE' });
@@ -730,12 +1286,8 @@
                     loadBookmarks();
                     select.value = '';
                     showStatus(`Bookmark "${name}" deleted`, 'bg-green-100 text-green-800');
-                } else {
-                    showStatus('Failed to delete', 'bg-red-100 text-red-800');
                 }
-            } catch (e) {
-                showStatus('Error deleting bookmark: ' + e.message, 'bg-red-100 text-red-800');
-            }
+            } catch (e) { showStatus('Error deleting bookmark: ' + e.message, 'bg-red-100 text-red-800'); }
         }
 
         // ── Custom Provider ──
@@ -746,12 +1298,7 @@
             btn.disabled = true;
             const baseUrl = document.getElementById('customBaseUrl').value.trim();
             const apiKey = document.getElementById('customApiKey').value.trim();
-            if (!baseUrl) {
-                showStatus('Please enter a base URL', 'bg-red-100 text-red-800');
-                btn.innerText = originalText;
-                btn.disabled = false;
-                return;
-            }
+            if (!baseUrl) { showStatus('Please enter a base URL', 'bg-red-100 text-red-800'); btn.innerText = originalText; btn.disabled = false; return; }
             try {
                 const res = await fetch('/ui/custom-models', {
                     method: 'POST',
@@ -771,19 +1318,13 @@
                         opt.value = m.id;
                         opt.innerText = m.name;
                         opt.dataset.url = m.url;
-                        opt.dataset.key = m.key;
                         opt.dataset.base = m.base;
-                        opt.dataset.provider = m.provider;
                         select.appendChild(opt);
                     });
-                    showStatus(`Fetched ${data.length} models from custom provider`, 'bg-green-100 text-green-800');
+                    showStatus(`Found ${data.length} models`, 'bg-green-100 text-green-800');
                 }
-            } catch (e) {
-                showStatus('Fetch failed: ' + e.message, 'bg-red-100 text-red-800');
-            } finally {
-                btn.innerText = originalText;
-                btn.disabled = false;
-            }
+            } catch (e) { showStatus('Fetch failed: ' + e.message, 'bg-red-100 text-red-800'); }
+            finally { btn.innerText = originalText; btn.disabled = false; }
         }
 
         async function testCustomProvider() {
@@ -795,158 +1336,268 @@
             const apiKey = document.getElementById('customApiKey').value.trim();
             const select = document.getElementById('customModelSelect');
             const model = select.value;
-            if (!baseUrl) {
-                showStatus('Please enter a base URL', 'bg-red-100 text-red-800');
-                btn.innerText = originalText;
-                btn.disabled = false;
-                return;
-            }
+            const profile = detectCustomProviderProfile(baseUrl);
+            if (!baseUrl) { showStatus('Please enter a base URL', 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200'); btn.innerText = originalText; btn.disabled = false; return; }
             try {
                 const res = await fetch('/ui/custom-test', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ baseUrl, apiKey, model })
+                    body: JSON.stringify({ baseUrl, apiKey, model, profile })
                 });
                 const result = await res.json();
                 if (result.success) {
-                    showStatus('Custom provider TEST SUCCESS: ' + result.content, 'bg-green-100 text-green-800');
+                    showTestResult('Custom Provider Test Success', result.content, false);
                 } else {
-                    showStatus('Custom provider TEST FAILED: ' + result.error, 'bg-red-100 text-red-800');
+                    showTestResult('Custom Provider Test Failed', result.error, true);
                 }
-            } catch (e) {
-                showStatus('Test error: ' + e.message, 'bg-red-100 text-red-800');
-            } finally {
-                btn.innerText = originalText;
-                btn.disabled = false;
-            }
+            } catch (e) { showTestResult('Custom Provider Test Error', e.message, true); }
+            finally { btn.innerText = originalText; btn.disabled = false; }
         }
 
         function applyCustomModel(profile) {
             const select = document.getElementById('customModelSelect');
             const opt = select.options[select.selectedIndex];
-            if (!opt || !opt.value) {
-                showStatus('Please select a model first', 'bg-red-100 text-red-800');
-                return;
-            }
+            if (!opt || !opt.value) { showStatus('Please select a model first', 'bg-red-100 text-red-800'); return; }
+            const previousModel = document.getElementById(profile + 'ModelSelect').value;
             document.getElementById(profile + 'ModelSelect').innerHTML = '';
             const clone = opt.cloneNode(true);
             document.getElementById(profile + 'ModelSelect').appendChild(clone);
             document.getElementById(profile + 'ModelSelect').value = opt.value;
-            document.getElementById(profile + 'TargetUrl').value = opt.dataset.url;
-            document.getElementById(profile + 'ApiKey').value = opt.dataset.key;
-            document.getElementById(profile + 'StatusModel').innerText = opt.value;
+            const normalizedTargetUrl = normalizeTargetUrlForProfile(profile, opt.dataset.base || opt.dataset.url || document.getElementById('customBaseUrl').value);
+            document.getElementById(profile + 'TargetUrl').value = normalizedTargetUrl;
+            document.getElementById(profile + 'ApiKey').value = document.getElementById('customApiKey').value;
+            document.getElementById(profile + 'StatusModel').innerText = profile === 'claude' ? getClaudePublicAliasValue() : opt.value;
             document.getElementById(profile + 'StatusProvider').innerText = 'Custom';
+            // Copy cost values from Custom Provider inputs
+            document.getElementById(profile + 'InputCostPer1M').value = document.getElementById('customInputCostPer1M').value || '';
+            document.getElementById(profile + 'OutputCostPer1M').value = document.getElementById('customOutputCostPer1M').value || '';
+            if (previousModel && previousModel !== opt.value) clearProfileContextState(profile);
+            if (!currentConfigState[profile]) currentConfigState[profile] = {};
+            currentConfigState[profile] = {
+                ...currentConfigState[profile],
+                currentModel: profile === 'claude' ? getClaudePublicAliasValue() : opt.value,
+                _upstreamModel: profile === 'claude' ? opt.value : currentConfigState[profile]?._upstreamModel,
+                targetUrl: normalizedTargetUrl,
+                apiKey: document.getElementById('customApiKey').value || ''
+            };
+            currentConfigState.customProvider = {
+                baseUrl: document.getElementById('customBaseUrl').value || '',
+                apiKey: document.getElementById('customApiKey').value || ''
+            };
+            updateConfigDisplay(currentConfigState);
+            if (profile === 'claude') onClaudeAliasChange();
+            syncSummaryFromUI();
             refreshContextWindow(profile);
-            showStatus(`Applied ${opt.value} to ${profile.toUpperCase()} profile. Click Save to persist.`, 'bg-green-100 text-green-800');
+            showStatus(`Applied ${opt.value} to ${profile.toUpperCase()}. Click Save to persist.`, 'bg-green-100 text-green-800');
+        }
+
+        // ── Profile Config ──
+        async function saveProfileConfig(profile) {
+            const previousModel = profile === 'claude'
+                ? (currentConfigState[profile]?._upstreamModel || currentConfigState[profile]?.currentModel)
+                : currentConfigState[profile]?.currentModel;
+            const normalizedTargetUrl = normalizeTargetUrlForProfile(profile, document.getElementById(profile + 'TargetUrl').value);
+            // Read cost values from overview inputs
+            const capitalProfile = profile.charAt(0).toUpperCase() + profile.slice(1);
+            const inCostEl = document.getElementById('overview' + capitalProfile + 'InCost');
+            const outCostEl = document.getElementById('overview' + capitalProfile + 'OutCost');
+            const data = {
+                profile: profile,
+                currentModel: profile === 'claude'
+                    ? getClaudePublicAliasValue()
+                    : document.getElementById(profile + 'ModelSelect').value,
+                targetUrl: normalizedTargetUrl,
+                apiKey: document.getElementById(profile + 'ApiKey').value,
+                contextWindow: document.getElementById(profile + 'ContextWindow').value.replace(/[^0-9]/g, ''),
+                inputCostPer1M: inCostEl ? inCostEl.value : '',
+                outputCostPer1M: outCostEl ? outCostEl.value : ''
+            };
+            if (profile === 'claude') {
+                data._upstreamModel = document.getElementById('claudeModelSelect').value;
+            }
+            document.getElementById(profile + 'TargetUrl').value = normalizedTargetUrl;
+            const customBaseUrl = document.getElementById('customBaseUrl').value;
+            const customApiKey = document.getElementById('customApiKey').value;
+            if (customBaseUrl) {
+                data.customProvider = { baseUrl: customBaseUrl, apiKey: customApiKey };
+            }
+            const res = await fetch('/ui/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            if (res.ok) {
+                const nextModel = profile === 'claude' ? (data._upstreamModel || data.currentModel) : data.currentModel;
+                if (previousModel && previousModel !== nextModel) clearProfileContextState(profile);
+                if (!currentConfigState[profile]) currentConfigState[profile] = {};
+                currentConfigState[profile] = {
+                    ...currentConfigState[profile],
+                    currentModel: data.currentModel,
+                    _upstreamModel: profile === 'claude' ? data._upstreamModel : currentConfigState[profile]?._upstreamModel,
+                    targetUrl: data.targetUrl,
+                    apiKey: data.apiKey,
+                    inputCostPer1M: Number(data.inputCostPer1M) || 0,
+                    outputCostPer1M: Number(data.outputCostPer1M) || 0
+                };
+                if (data.customProvider) currentConfigState.customProvider = data.customProvider;
+                updateConfigDisplay(currentConfigState);
+                showStatus(profile.toUpperCase() + ' profile saved!', 'bg-green-100 text-green-800');
+                document.getElementById(profile + 'StatusModel').innerText = data.currentModel;
+                if (profile === 'claude') onClaudeAliasChange();
+                document.getElementById(profile + 'StatusProvider').innerText = extractProvider(data.targetUrl);
+                syncSummaryFromUI();
+            }
+        }
+
+        async function saveTrafficSettings() {
+            const requestLogLimit = Number.parseInt(document.getElementById('requestLogLimit').value, 10);
+            const pendingTimeoutMinutes = Number.parseInt(document.getElementById('pendingTimeoutMinutes').value, 10);
+            const payload = {
+                requestLogLimit: Number.isFinite(requestLogLimit) && requestLogLimit > 0 ? requestLogLimit : DEFAULT_REQUEST_LOG_LIMIT,
+                pendingRequestTimeoutMinutes: Number.isFinite(pendingTimeoutMinutes) && pendingTimeoutMinutes > 0 ? pendingTimeoutMinutes : DEFAULT_PENDING_TIMEOUT_MINUTES
+            };
+            const res = await fetch('/ui/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!res.ok) {
+                showStatus('Failed to save traffic settings', 'bg-red-100 text-red-800');
+                return;
+            }
+            currentConfigState = {
+                ...currentConfigState,
+                requestLogLimit: payload.requestLogLimit,
+                pendingRequestTimeoutMinutes: payload.pendingRequestTimeoutMinutes
+            };
+            updateConfigDisplay(currentConfigState);
+            showStatus('Traffic settings saved!', 'bg-green-100 text-green-800');
+        }
+
+        async function testProfileConfig(profile) {
+            const btn = event.target;
+            const originalText = btn.innerText;
+            btn.innerText = 'Testing...';
+            btn.disabled = true;
+            const data = {
+                profile: profile,
+                model: document.getElementById(profile + 'ModelSelect').value,
+                targetUrl: normalizeTargetUrlForProfile(profile, document.getElementById(profile + 'TargetUrl').value),
+                apiKey: document.getElementById(profile + 'ApiKey').value
+            };
+            try {
+                const res = await fetch('/ui/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                const result = await res.json();
+                if (result.success) {
+                    showTestResult('Test Success', result.content, false);
+                } else {
+                    showTestResult('Test Failed', result.error, true);
+                }
+            } catch (e) { showTestResult('Test Error', e.message, true); }
+            finally { btn.innerText = originalText; btn.disabled = false; }
         }
 
         // ── Request Inspector ──
-        let inspectorData = [];
-        let expandedReqId = null;
-
         async function loadInspector() {
             try {
-                const res = await fetch('/ui/details');
+                const res = await fetch('/ui/details?' + getPeriodQueryString(currentPeriod), { cache: 'no-store' });
+                if (!res.ok) throw new Error('Inspector HTTP ' + res.status);
                 const data = await res.json();
-                if (JSON.stringify(data) === JSON.stringify(inspectorData)) return;
+                lastInspectorRenderKey = buildInspectorRenderKey(data);
                 inspectorData = data;
                 renderInspector();
-            } catch (e) {}
+                updateDebugStamp('inspector', `${data.length} rows`);
+            } catch (e) { reportLiveError('inspector', e); }
         }
 
         function renderInspector() {
             const container = document.getElementById('inspectorList');
             if (inspectorData.length === 0) {
-                container.innerHTML = '<div class="text-gray-400 text-sm italic">Requests will appear here...</div>';
+                container.innerHTML = '<div class="text-slate-400 dark:text-slate-500 text-sm italic">Requests will appear here...</div>';
                 return;
             }
             container.innerHTML = inspectorData.map(item => {
                 const isExpanded = item.reqId === expandedReqId;
-                const statusColor = item.status === 'error' ? 'bg-red-100 text-red-700' :
-                                    item.status === 'completed' ? 'bg-green-100 text-green-700' :
-                                    'bg-amber-100 text-amber-700';
+                const statusColor = item.status === 'error' ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300' :
+                                    item.status === 'completed' ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300' :
+                                    'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300';
                 const statusLabel = item.status === 'error' ? 'ERROR' :
                                     item.status === 'completed' ? 'OK' : 'PENDING';
+                const responsePanels = extractResponsePanels(item.responseBody);
+                const toolInteractions = extractToolInteractions(item);
+                const toolInteractionPanels = renderToolInteractionPanels(toolInteractions);
                 const hasThinking = item.thinking && item.thinking.length > 0;
                 const hasTools = item.toolCalls && item.toolCalls.length > 0;
-                const finishBadge = item.finishReason ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-200 text-gray-600 ml-2">finish: ${item.finishReason}</span>` : '';
+                const hasResponsePanels = responsePanels.length > 0;
+                const hasToolInteractions = toolInteractions.length > 0;
+                const finishBadge = item.finishReason ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-600 text-slate-600 dark:text-slate-300 ml-2">finish: ${item.finishReason}</span>` : '';
 
                 let detailHtml = '';
                 if (isExpanded) {
-                    detailHtml = `<div class="mt-3 space-y-3 border-t pt-3">`;
-
-                    // Thinking section
+                    detailHtml = `<div class="mt-3 space-y-3 border-t border-slate-100 dark:border-slate-700 pt-3">`;
                     if (hasThinking) {
                         detailHtml += `
-                            <div class="bg-indigo-50 rounded p-3">
-                                <p class="text-[10px] font-bold text-indigo-700 uppercase mb-1">🤔 Model Thinking</p>
-                                <pre class="text-xs text-indigo-900 whitespace-pre-wrap font-mono leading-relaxed">${escapeHtml(item.thinking)}</pre>
+                            <div class="bg-indigo-50 dark:bg-indigo-900/20 rounded-lg p-3">
+                                <p class="text-[10px] font-bold text-indigo-700 dark:text-indigo-300 uppercase mb-1">🤔 Model Thinking</p>
+                                <pre class="text-xs text-indigo-900 dark:text-indigo-200 whitespace-pre-wrap font-mono leading-relaxed">${escapeHtml(item.thinking)}</pre>
                             </div>`;
                     }
-
-                    // Tool calls section
                     if (hasTools) {
                         detailHtml += `
-                            <div class="bg-orange-50 rounded p-3">
-                                <p class="text-[10px] font-bold text-orange-700 uppercase mb-1">🔧 Tool Calls</p>
+                            <div class="bg-orange-50 dark:bg-orange-900/20 rounded-lg p-3">
+                                <p class="text-[10px] font-bold text-orange-700 dark:text-orange-300 uppercase mb-1">🔧 Tool Calls</p>
                                 ${item.toolCalls.map(tc => `
                                     <div class="mb-2">
-                                        <p class="text-xs font-bold text-orange-800">${escapeHtml(tc.name)} <span class="text-[10px] text-gray-500 font-normal">(${tc.id})</span></p>
-                                        <pre class="text-[10px] text-orange-900 bg-white rounded p-2 mt-1 overflow-x-auto">${escapeHtml(prettyJson(tc.arguments))}</pre>
+                                        <p class="text-xs font-bold text-orange-800 dark:text-orange-300">${escapeHtml(tc.name)} <span class="text-[10px] text-slate-500 dark:text-slate-400 font-normal">(${tc.id})</span></p>
+                                        <pre class="text-[10px] text-orange-900 dark:text-orange-200 bg-white dark:bg-slate-800 rounded p-2 mt-1 overflow-x-auto">${escapeHtml(prettyJson(tc.arguments))}</pre>
                                     </div>
                                 `).join('')}
                             </div>`;
                     }
-
-                    // Response content
-                    if (item.responseBody) {
-                        const choice = item.responseBody.choices?.[0];
-                        const content = choice?.message?.content || '';
-                        if (content) {
-                            detailHtml += `
-                                <div class="bg-gray-50 rounded p-3">
-                                    <p class="text-[10px] font-bold text-gray-700 uppercase mb-1">💬 Response Content</p>
-                                    <pre class="text-xs text-gray-800 whitespace-pre-wrap font-mono leading-relaxed">${escapeHtml(content)}</pre>
-                                </div>`;
-                        }
+                    if (hasToolInteractions) {
+                        detailHtml += toolInteractionPanels;
                     }
-
-                    // Error
+                    if (hasResponsePanels) {
+                        detailHtml += responsePanels.map(renderResponsePanel).join('');
+                    }
                     if (item.error) {
                         detailHtml += `
-                            <div class="bg-red-50 rounded p-3">
-                                <p class="text-[10px] font-bold text-red-700 uppercase mb-1">❌ Error</p>
-                                <pre class="text-xs text-red-800 whitespace-pre-wrap font-mono">${escapeHtml(item.error)}</pre>
+                            <div class="bg-red-50 dark:bg-red-900/20 rounded-lg p-3">
+                                <p class="text-[10px] font-bold text-red-700 dark:text-red-300 uppercase mb-1">❌ Error</p>
+                                <pre class="text-xs text-red-800 dark:text-red-200 whitespace-pre-wrap font-mono">${escapeHtml(item.error)}</pre>
                             </div>`;
                     }
-
-                    // Raw JSON toggle
                     detailHtml += `
                         <details class="text-xs">
-                            <summary class="cursor-pointer text-gray-500 hover:text-gray-700 font-medium">View Raw Request / Response</summary>
+                            <summary class="cursor-pointer text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 font-medium">View Raw Request / Response</summary>
                             <div class="mt-2 space-y-2">
                                 <div>
-                                    <p class="text-[10px] font-bold text-gray-500 uppercase">Request</p>
-                                    <pre class="text-[10px] bg-gray-100 rounded p-2 overflow-x-auto">${escapeHtml(prettyJson(item.requestBody))}</pre>
+                                    <p class="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Request</p>
+                                    <pre class="text-[10px] bg-slate-100 dark:bg-slate-700 rounded p-2 overflow-x-auto">${escapeHtml(prettyJson(item.requestBody))}</pre>
                                 </div>
                                 <div>
-                                    <p class="text-[10px] font-bold text-gray-500 uppercase">Response</p>
-                                    <pre class="text-[10px] bg-gray-100 rounded p-2 overflow-x-auto">${escapeHtml(prettyJson(item.responseBody))}</pre>
+                                    <p class="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Response</p>
+                                    <pre class="text-[10px] bg-slate-100 dark:bg-slate-700 rounded p-2 overflow-x-auto">${escapeHtml(prettyJson(item.responseBody))}</pre>
                                 </div>
                             </div>
                         </details>`;
-
                     detailHtml += `</div>`;
                 }
 
                 return `
-                    <div class="border rounded-lg p-3 cursor-pointer hover:bg-gray-50 transition" onclick="toggleInspector('${item.reqId}')">
+                    <div class="border border-slate-200 dark:border-slate-700 rounded-lg p-3 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 dark:bg-slate-900 transition" onclick="toggleInspector('${item.reqId}')">
                         <div class="flex items-center justify-between">
                             <div class="flex items-center gap-2">
                                 <span class="text-[10px] font-bold px-1.5 py-0.5 rounded ${statusColor}">${statusLabel}</span>
-                                <span class="text-xs font-mono text-gray-600">${item.timestamp}</span>
+                                <span class="text-xs font-mono text-slate-600 dark:text-slate-300">${item.timestamp}</span>
                                 ${hasThinking ? '<span class="text-[10px] text-indigo-600">🤔</span>' : ''}
                                 ${hasTools ? '<span class="text-[10px] text-orange-600">🔧</span>' : ''}
+                                ${hasToolInteractions ? '<span class="text-[10px] text-emerald-600">📁</span>' : ''}
+                                ${hasResponsePanels ? '<span class="text-[10px] text-slate-500 dark:text-slate-300">💬</span>' : ''}
                                 ${item.error ? '<span class="text-[10px] text-red-600">❌</span>' : ''}
                             </div>
                             ${finishBadge}
@@ -962,6 +1613,47 @@
             renderInspector();
         }
 
+        function switchSection(section) {
+            activeSection = section;
+            localStorage.setItem('claudish-active-section', section);
+
+            document.querySelectorAll('.dashboard-section').forEach(el => {
+                el.classList.toggle('hidden', el.id !== 'section-' + section);
+            });
+
+            document.querySelectorAll('.section-nav').forEach(btn => {
+                const isActive = btn.dataset.section === section;
+                if (btn.classList.contains('rounded-full')) {
+                    btn.classList.toggle('bg-slate-900', isActive);
+                    btn.classList.toggle('text-white', isActive);
+                    btn.classList.toggle('border-slate-900', isActive);
+                    btn.classList.toggle('dark:bg-slate-100', isActive);
+                    btn.classList.toggle('dark:text-slate-900', isActive);
+                    btn.classList.toggle('dark:border-slate-100', isActive);
+                } else {
+                    btn.classList.toggle('bg-slate-900', isActive);
+                    btn.classList.toggle('text-white', isActive);
+                    btn.classList.toggle('shadow-sm', isActive);
+                    btn.classList.toggle('dark:bg-slate-100', isActive);
+                    btn.classList.toggle('dark:text-slate-900', isActive);
+                }
+            });
+
+            // Sync period button active state after section switch
+            setPeriod(currentPeriod);
+            if (sectionVisible('overview', 'traffic')) loadRequests();
+            if (sectionVisible('overview')) loadActivity();
+            if (sectionVisible('inspector')) loadInspector();
+        }
+
+        function toggleApiKeyVisibility(inputId, button) {
+            const input = document.getElementById(inputId);
+            if (!input) return;
+            const reveal = input.type === 'password';
+            input.type = reveal ? 'text' : 'password';
+            button.innerText = reveal ? '🙈' : '👁';
+        }
+
         function escapeHtml(text) {
             if (!text) return '';
             const div = document.createElement('div');
@@ -971,25 +1663,520 @@
 
         function prettyJson(obj) {
             if (!obj) return '';
-            try {
-                return JSON.stringify(typeof obj === 'string' ? JSON.parse(obj) : obj, null, 2);
-            } catch (e) {
-                return String(obj);
+            try { return JSON.stringify(typeof obj === 'string' ? JSON.parse(obj) : obj, null, 2); }
+            catch (e) { return String(obj); }
+        }
+
+        function parseStructuredValue(value) {
+            if (!value) return null;
+            if (typeof value === 'object') return value;
+            if (typeof value !== 'string') return null;
+            try { return JSON.parse(value); }
+            catch (e) { return null; }
+        }
+
+        function stringifyPanelContent(value) {
+            if (value === null || value === undefined) return '';
+            if (typeof value === 'string') return value;
+            return prettyJson(value);
+        }
+
+        function extractFilePathsFromValue(value) {
+            const seen = new Set();
+            const paths = [];
+
+            function visit(input) {
+                if (!input) return;
+                if (typeof input === 'string') {
+                    const pathPattern = /(?:[A-Za-z]:\\[^\s"'`<>|]+|\/[A-Za-z0-9._\-\/\\]+|(?:^|[\s{[])(?:src|app|lib|public|tests?|docs|scripts|utils|adapters)[\/\\][^\s"'`<>|]+)/g;
+                    const matches = input.match(pathPattern) || [];
+                    matches.forEach(match => {
+                        const cleaned = String(match).trim().replace(/^[{[]/, '').replace(/[,\]}]$/, '');
+                        if (!cleaned || seen.has(cleaned)) return;
+                        seen.add(cleaned);
+                        paths.push(cleaned);
+                    });
+                    return;
+                }
+                if (Array.isArray(input)) {
+                    input.forEach(visit);
+                    return;
+                }
+                if (typeof input === 'object') {
+                    Object.entries(input).forEach(([key, val]) => {
+                        if (/(path|file|filename|target|glob|pattern|search_path|relative_path)/i.test(key)) {
+                            visit(val);
+                        } else if (typeof val === 'object' || typeof val === 'string') {
+                            visit(val);
+                        }
+                    });
+                }
+            }
+
+            visit(value);
+            return paths.slice(0, 8);
+        }
+
+        function classifyToolAction(name) {
+            const lowered = String(name || '').toLowerCase();
+            if (/(read|open|view|fetch|get_file|cat)/.test(lowered)) return 'Read';
+            if (/(write|edit|patch|replace|create|insert|delete|move|rename|apply)/.test(lowered)) return 'Change';
+            if (/(glob|ls|find|search|grep|rg|list)/.test(lowered)) return 'Search';
+            return 'Tool';
+        }
+
+        function isFileInteraction(name, args, output) {
+            const lowered = String(name || '').toLowerCase();
+            if (/(read|write|edit|patch|replace|file|path|glob|grep|find|ls|open|view|cat|delete|move|rename)/.test(lowered)) return true;
+            return extractFilePathsFromValue(args).length > 0 || extractFilePathsFromValue(output).length > 0;
+        }
+
+        function buildToolInteraction(kind, payload, source) {
+            if (!payload || typeof payload !== 'object') return null;
+            const name = payload.name || payload.tool_name || 'unknown';
+            const args = payload.arguments ?? payload.input ?? payload.args ?? null;
+            const output = payload.output ?? payload.content ?? payload.result ?? null;
+            const paths = [
+                ...extractFilePathsFromValue(args),
+                ...extractFilePathsFromValue(output)
+            ].filter((value, index, arr) => arr.indexOf(value) === index);
+            return {
+                kind,
+                source,
+                name,
+                id: payload.id || payload.tool_use_id || payload.tool_call_id || '',
+                action: classifyToolAction(name),
+                isFile: isFileInteraction(name, args, output),
+                paths,
+                argumentsText: stringifyPanelContent(args),
+                outputText: stringifyPanelContent(output)
+            };
+        }
+
+        function extractToolInteractions(item) {
+            const interactions = [];
+            const requestBody = parseStructuredValue(item.requestBody);
+            const responseBody = parseStructuredValue(item.responseBody);
+
+            function pushIfPresent(interaction) {
+                if (!interaction) return;
+                if (!interaction.argumentsText && !interaction.outputText && interaction.paths.length === 0) return;
+                interactions.push(interaction);
+            }
+
+            function scanMessages(messages, source) {
+                if (!Array.isArray(messages)) return;
+                messages.forEach(message => {
+                    if (!message || typeof message !== 'object') return;
+                    if (Array.isArray(message.tool_calls)) {
+                        message.tool_calls.forEach(tc => {
+                            pushIfPresent(buildToolInteraction('call', {
+                                id: tc.id,
+                                name: tc.function?.name,
+                                arguments: parseStructuredValue(tc.function?.arguments) || tc.function?.arguments
+                            }, source));
+                        });
+                    }
+                    if (message.role === 'tool') {
+                        pushIfPresent(buildToolInteraction('result', {
+                            id: message.tool_call_id,
+                            name: 'tool_result',
+                            output: parseStructuredValue(message.content) || message.content
+                        }, source));
+                    }
+                    if (Array.isArray(message.content)) {
+                        message.content.forEach(block => {
+                            if (!block || typeof block !== 'object') return;
+                            if (block.type === 'tool_use') {
+                                pushIfPresent(buildToolInteraction('call', {
+                                    id: block.id,
+                                    name: block.name,
+                                    input: block.input
+                                }, source));
+                            } else if (block.type === 'tool_result') {
+                                pushIfPresent(buildToolInteraction('result', {
+                                    id: block.tool_use_id,
+                                    name: 'tool_result',
+                                    output: block.content
+                                }, source));
+                            }
+                        });
+                    }
+                });
+            }
+
+            function scanTopLevel(parsed, source) {
+                if (!parsed || typeof parsed !== 'object') return;
+                scanMessages(parsed.messages, source);
+
+                if (Array.isArray(parsed.content)) {
+                    parsed.content.forEach(block => {
+                        if (!block || typeof block !== 'object') return;
+                        if (block.type === 'tool_use') {
+                            pushIfPresent(buildToolInteraction('call', {
+                                id: block.id,
+                                name: block.name,
+                                input: block.input
+                            }, source));
+                        } else if (block.type === 'tool_result') {
+                            pushIfPresent(buildToolInteraction('result', {
+                                id: block.tool_use_id,
+                                name: 'tool_result',
+                                output: block.content
+                            }, source));
+                        }
+                    });
+                }
+
+                const choice = parsed.choices?.[0];
+                if (choice?.message?.tool_calls) {
+                    choice.message.tool_calls.forEach(tc => {
+                        pushIfPresent(buildToolInteraction('call', {
+                            id: tc.id,
+                            name: tc.function?.name,
+                            arguments: parseStructuredValue(tc.function?.arguments) || tc.function?.arguments
+                        }, source));
+                    });
+                }
+
+                if (Array.isArray(parsed.output)) {
+                    parsed.output.forEach(entry => {
+                        if (!entry || typeof entry !== 'object') return;
+                        if (entry.type === 'function_call') {
+                            pushIfPresent(buildToolInteraction('call', {
+                                id: entry.call_id || entry.id,
+                                name: entry.name,
+                                arguments: parseStructuredValue(entry.arguments) || entry.arguments
+                            }, source));
+                        } else if (entry.type === 'function_call_output') {
+                            pushIfPresent(buildToolInteraction('result', {
+                                id: entry.call_id || entry.id,
+                                name: 'function_call_output',
+                                output: entry.output
+                            }, source));
+                        }
+                    });
+                }
+            }
+
+            scanTopLevel(requestBody, 'request');
+            scanTopLevel(responseBody, 'response');
+
+            return interactions;
+        }
+
+        function renderToolInteractionPanels(interactions) {
+            if (!Array.isArray(interactions) || interactions.length === 0) return '';
+            const fileInteractions = interactions.filter(entry => entry.isFile);
+            const otherInteractions = interactions.filter(entry => !entry.isFile);
+            const ordered = [...fileInteractions, ...otherInteractions].slice(0, 20);
+
+            return `
+                <div class="bg-emerald-50 dark:bg-emerald-900/20 rounded-lg p-3">
+                    <p class="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 uppercase mb-2">📁 File Activity And Tool Output</p>
+                    <div class="space-y-3">
+                        ${ordered.map(renderToolInteractionCard).join('')}
+                    </div>
+                </div>`;
+        }
+
+        function renderToolInteractionCard(entry) {
+            const pathLine = entry.paths.length > 0
+                ? `<p class="text-[10px] text-emerald-700 dark:text-emerald-300 font-mono break-all">${escapeHtml(entry.paths.join('\n'))}</p>`
+                : '';
+            const argsBlock = entry.argumentsText
+                ? `<div><p class="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">Input</p><pre class="text-[10px] bg-white dark:bg-slate-800 rounded p-2 overflow-x-auto text-slate-700 dark:text-slate-200">${escapeHtml(entry.argumentsText)}</pre></div>`
+                : '';
+            const outputBlock = entry.outputText
+                ? `<div><p class="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">Output</p><pre class="text-[10px] bg-white dark:bg-slate-800 rounded p-2 overflow-x-auto text-slate-700 dark:text-slate-200">${escapeHtml(entry.outputText)}</pre></div>`
+                : '';
+            return `
+                <div class="rounded-lg border border-emerald-200 dark:border-emerald-800 bg-white/70 dark:bg-slate-900 p-3 space-y-2">
+                    <div class="flex items-center justify-between gap-3">
+                        <div>
+                            <p class="text-xs font-bold text-emerald-800 dark:text-emerald-200">${escapeHtml(entry.action)}: ${escapeHtml(entry.name)}</p>
+                            <p class="text-[10px] text-slate-500 dark:text-slate-400 uppercase">${escapeHtml(entry.source)}${entry.kind === 'result' ? ' result' : ' call'}${entry.id ? ' • ' + escapeHtml(entry.id) : ''}</p>
+                        </div>
+                    </div>
+                    ${pathLine}
+                    ${argsBlock}
+                    ${outputBlock}
+                </div>`;
+        }
+
+        function extractResponsePanels(responseBody) {
+            const parsed = parseStructuredValue(responseBody);
+            if (!parsed) return [];
+
+            const panels = [];
+            if (Array.isArray(parsed.content)) {
+                parsed.content.forEach(block => {
+                    if (!block || typeof block !== 'object') return;
+                    if (block.type === 'thinking' && block.thinking) {
+                        panels.push({ tone: 'indigo', title: 'Anthropic Thinking', content: block.thinking });
+                    } else if (block.type === 'text' && block.text) {
+                        panels.push({ tone: 'slate', title: 'Response Content', content: block.text });
+                    } else if (block.type === 'tool_use') {
+                        panels.push({ tone: 'orange', title: `Tool Use: ${block.name || 'unknown'}`, content: prettyJson(block.input || block) });
+                    } else if (block.type === 'tool_result') {
+                        panels.push({
+                            tone: 'amber',
+                            title: `Tool Result${block.tool_use_id ? ' (' + block.tool_use_id + ')' : ''}`,
+                            content: typeof block.content === 'string' ? block.content : prettyJson(block.content || block)
+                        });
+                    }
+                });
+            }
+
+            const choice = parsed.choices?.[0];
+            const openAIThinking = choice?.message?.reasoning || choice?.message?.thinking;
+            const openAIContent = choice?.message?.content || '';
+            if (openAIThinking) panels.push({ tone: 'indigo', title: 'Model Thinking', content: openAIThinking });
+            if (openAIContent) panels.push({ tone: 'slate', title: 'Response Content', content: openAIContent });
+            return panels;
+        }
+
+        function renderResponsePanel(panel) {
+            const styles = {
+                indigo: { box: 'bg-indigo-50 dark:bg-indigo-900/20', title: 'text-indigo-700 dark:text-indigo-300', body: 'text-indigo-900 dark:text-indigo-200' },
+                orange: { box: 'bg-orange-50 dark:bg-orange-900/20', title: 'text-orange-700 dark:text-orange-300', body: 'text-orange-900 dark:text-orange-200' },
+                amber: { box: 'bg-amber-50 dark:bg-amber-900/20', title: 'text-amber-700 dark:text-amber-300', body: 'text-amber-900 dark:text-amber-200' },
+                slate: { box: 'bg-slate-50 dark:bg-slate-900', title: 'text-slate-700 dark:text-slate-200', body: 'text-slate-800 dark:text-slate-100' }
+            };
+            const tone = styles[panel.tone] || styles.slate;
+            return `
+                <div class="${tone.box} rounded-lg p-3">
+                    <p class="text-[10px] font-bold ${tone.title} uppercase mb-1">${escapeHtml(panel.title)}</p>
+                    <pre class="text-xs ${tone.body} whitespace-pre-wrap font-mono leading-relaxed">${escapeHtml(panel.content)}</pre>
+                </div>`;
+        }
+
+        // ── Config UI ──
+        function applyConfigToUI(cfg) {
+            currentConfigState = JSON.parse(JSON.stringify(cfg || {}));
+            if (cfg.claude) {
+                document.getElementById('claudePublicModel').value = cfg.claude.currentModel || DEFAULT_CLAUDE_PUBLIC_ALIAS;
+                setSelectValue('claudeModelSelect', cfg.claude._upstreamModel || cfg.claude.currentModel);
+                document.getElementById('claudeTargetUrl').value = cfg.claude.targetUrl || '';
+                document.getElementById('claudeApiKey').value = cfg.claude.apiKey || '';
+                document.getElementById('claudeContextWindow').value = cfg.claude.contextWindow ? cfg.claude.contextWindow.toLocaleString() + ' tokens' : '';
+                document.getElementById('overviewClaudeInCost').value = cfg.claude.inputCostPer1M || '';
+                document.getElementById('overviewClaudeOutCost').value = cfg.claude.outputCostPer1M || '';
+                document.getElementById('claudeStatusModel').innerText = cfg.claude.currentModel || '--';
+                document.getElementById('claudeStatusAlias').innerText = 'Public alias: ' + (cfg.claude.currentModel || DEFAULT_CLAUDE_PUBLIC_ALIAS);
+                document.getElementById('claudeStatusProvider').innerText = extractProvider(cfg.claude.targetUrl);
+                document.getElementById('claudeStatusContext').innerText = cfg.claude.contextWindow ? formatTokenCount(cfg.claude.contextWindow) + ' ctx' : '--';
+            }
+            if (cfg.codex) {
+                setSelectValue('codexModelSelect', cfg.codex.currentModel);
+                document.getElementById('codexTargetUrl').value = cfg.codex.targetUrl || '';
+                document.getElementById('codexApiKey').value = cfg.codex.apiKey || '';
+                document.getElementById('codexContextWindow').value = cfg.codex.contextWindow ? cfg.codex.contextWindow.toLocaleString() + ' tokens' : '';
+                document.getElementById('overviewCodexInCost').value = cfg.codex.inputCostPer1M || '';
+                document.getElementById('overviewCodexOutCost').value = cfg.codex.outputCostPer1M || '';
+                document.getElementById('codexStatusModel').innerText = cfg.codex.currentModel || '--';
+                document.getElementById('codexStatusProvider').innerText = extractProvider(cfg.codex.targetUrl);
+                document.getElementById('codexStatusContext').innerText = cfg.codex.contextWindow ? formatTokenCount(cfg.codex.contextWindow) + ' ctx' : '--';
+            }
+            if (cfg.customProvider) {
+                document.getElementById('customBaseUrl').value = cfg.customProvider.baseUrl || '';
+                document.getElementById('customApiKey').value = cfg.customProvider.apiKey || '';
+            }
+            document.getElementById('requestLogLimit').value = cfg.requestLogLimit || DEFAULT_REQUEST_LOG_LIMIT;
+            document.getElementById('pendingTimeoutMinutes').value = cfg.pendingRequestTimeoutMinutes || DEFAULT_PENDING_TIMEOUT_MINUTES;
+            updateConfigDisplay(cfg);
+            updateClineInfo();
+            updateOverviewSummary(cfg);
+            rerenderCostSummary();
+            onClaudeAliasChange();
+            if (cfg.claude && cfg.claude.currentModel) refreshContextWindow('claude');
+            if (cfg.codex && cfg.codex.currentModel) refreshContextWindow('codex');
+        }
+
+        function setSelectValue(id, value) {
+            const select = document.getElementById(id);
+            if (!select || !value) return;
+            let found = false;
+            for (let i = 0; i < select.options.length; i++) {
+                if (select.options[i].value === value) { found = true; break; }
+            }
+            if (found) { select.value = value; }
+            else {
+                const opt = document.createElement('option');
+                opt.value = value; opt.innerText = value;
+                select.insertBefore(opt, select.firstChild);
+                select.value = value;
             }
         }
 
-        // Initial load & Polling
-        // Pre-populate with fallback models so UI is never empty
-        ['claudeModelSelect', 'codexModelSelect'].forEach(id => populateSelect(id, FALLBACK_MODELS));
-        
-        fetch('/ui/config').then(r => r.json()).then(cfg => {
-            applyConfigToUI(cfg);
-        }).catch(e => console.error('[UI] Config fetch failed:', e));
-        
-        loadModels();
-        setInterval(loadActivity, 2000);
-        setInterval(loadRequests, 2000);
-        setInterval(loadInspector, 2000);
+        function updateConfigDisplay(cfg) {
+            const safeCfg = JSON.parse(JSON.stringify(cfg || {}));
+            ['claude', 'codex'].forEach(profile => {
+                if (!safeCfg[profile] || typeof safeCfg[profile] !== 'object') return;
+                Object.keys(safeCfg[profile]).forEach(key => {
+                    if (key.startsWith('_')) delete safeCfg[profile][key];
+                });
+            });
+            document.getElementById('currentConfig').innerText = JSON.stringify(safeCfg, null, 2);
+        }
+
+        function updateClineInfo() {
+            document.getElementById('clineBaseUrl').value = 'http://localhost:8085';
+            const overviewField = document.getElementById('overviewClineBaseUrl');
+            if (overviewField) overviewField.value = 'http://localhost:8085';
+        }
+
+        function updateOverviewSummary(cfg) {
+            const claudeModel = cfg?.claude?.currentModel || '--';
+            const codexModel = cfg?.codex?.currentModel || '--';
+            const claudeRoute = cfg?.claude?.targetUrl || '--';
+            const codexRoute = cfg?.codex?.targetUrl || '--';
+            const customBase = cfg?.customProvider?.baseUrl || '--';
+
+            document.getElementById('sidebarClaudeModel').innerText = claudeModel;
+            document.getElementById('sidebarCodexModel').innerText = codexModel;
+            document.getElementById('overviewClaudeRoute').innerText = claudeRoute;
+            document.getElementById('overviewClaudeBase').innerText = extractApiBaseUrl(claudeRoute);
+            document.getElementById('overviewCodexRoute').innerText = codexRoute;
+            document.getElementById('overviewCodexBase').innerText = extractApiBaseUrl(codexRoute);
+            document.getElementById('overviewCustomBase').innerText = customBase;
+
+            // Sync cost values from profile to overview inputs
+            syncProfileToOverview('claude');
+            syncProfileToOverview('codex');
+        }
+
+        function syncSummaryFromUI() {
+            document.getElementById('sidebarClaudeModel').innerText = document.getElementById('claudeStatusModel').innerText || '--';
+            document.getElementById('sidebarCodexModel').innerText = document.getElementById('codexStatusModel').innerText || '--';
+            const claudeRoute = document.getElementById('claudeTargetUrl').value || '--';
+            const codexRoute = document.getElementById('codexTargetUrl').value || '--';
+            const customBase = document.getElementById('customBaseUrl').value || '--';
+            document.getElementById('overviewClaudeRoute').innerText = claudeRoute;
+            document.getElementById('overviewClaudeBase').innerText = extractApiBaseUrl(claudeRoute);
+            document.getElementById('overviewCodexRoute').innerText = codexRoute;
+            document.getElementById('overviewCodexBase').innerText = extractApiBaseUrl(codexRoute);
+            document.getElementById('overviewCustomBase').innerText = customBase;
+        }
+
+        // ── Dark Mode ──
+        function initDarkMode() {
+            const saved = localStorage.getItem('claudish-dark');
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const shouldBeDark = saved === 'true' || (saved === null && prefersDark);
+            const html = document.documentElement;
+            if (shouldBeDark) {
+                html.classList.add('dark');
+                document.getElementById('moonIcon').classList.add('hidden');
+                document.getElementById('sunIcon').classList.remove('hidden');
+            } else {
+                html.classList.remove('dark');
+                document.getElementById('moonIcon').classList.remove('hidden');
+                document.getElementById('sunIcon').classList.add('hidden');
+            }
+        }
+        function toggleDarkMode() {
+            const html = document.documentElement;
+            const isDark = html.classList.toggle('dark');
+            localStorage.setItem('claudish-dark', isDark);
+            document.getElementById('moonIcon').classList.toggle('hidden');
+            document.getElementById('sunIcon').classList.toggle('hidden');
+        }
+
+        // ── Test Result Modal ──
+        function showTestResult(title, content, isError) {
+            const modal = document.getElementById('testResultModal');
+            const titleEl = document.getElementById('testResultTitle');
+            const bodyEl = document.getElementById('testResultBody');
+            titleEl.innerText = title;
+            titleEl.className = 'text-sm font-bold ' + (isError ? 'text-red-700 dark:text-red-400' : 'text-emerald-700 dark:text-emerald-400');
+            bodyEl.innerText = content;
+            bodyEl.className = 'text-xs font-mono p-4 rounded-xl border whitespace-pre-wrap break-words max-h-[50vh] overflow-y-auto ' +
+                (isError ? 'bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-200 border-red-200 dark:border-red-800' : 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-800 dark:text-emerald-200 border-emerald-200 dark:border-emerald-800');
+            modal.classList.remove('hidden');
+        }
+        function closeTestResult() {
+            document.getElementById('testResultModal').classList.add('hidden');
+        }
+        function copyTestResult() {
+            const text = document.getElementById('testResultBody').innerText;
+            navigator.clipboard.writeText(text).then(() => {
+                const btn = event.target;
+                const orig = btn.innerText;
+                btn.innerText = '✅ Copied';
+                setTimeout(() => btn.innerText = orig, 1500);
+            });
+        }
+
+        // ── Toast ──
+        function showStatus(message, classes) {
+            const toast = document.getElementById('statusToast');
+            toast.className = 'fixed bottom-4 right-4 px-5 py-3 rounded-xl shadow-xl text-sm font-medium transition-all duration-300 z-50 ' + classes;
+            toast.innerText = message;
+            toast.style.opacity = '1';
+            toast.style.transform = 'translateY(0)';
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateY(8px)';
+            }, 3000);
+        }
+
+        // ── Init ── (every step wrapped so one failure never blocks another)
+        console.log('[Init] Starting...');
+        try { initDarkMode(); console.log('[Init] ✓ darkMode'); } catch(e) { console.error('[Init] ✗ darkMode:', e); }
+        try { ['claudeModelSelect', 'codexModelSelect'].forEach(id => populateSelect(id, FALLBACK_MODELS)); console.log('[Init] ✓ selects'); } catch(e) { console.error('[Init] ✗ selects:', e); }
+        try { switchSection(activeSection); console.log('[Init] ✓ switchSection:', activeSection); } catch(e) { console.error('[Init] ✗ switchSection:', e); }
+        try { ['claudeTargetUrl', 'codexTargetUrl', 'customBaseUrl'].forEach(id => { const el = document.getElementById(id); if (el) el.addEventListener('input', syncSummaryFromUI); }); console.log('[Init] ✓ listeners'); } catch(e) { console.error('[Init] ✗ listeners:', e); }
+
+        // ── Real-time SSE ──
+        let _sseRetryTimeout = null;
+        function connectSSE() {
+            console.log('[SSE] Connecting...');
+            if (liveStream) {
+                liveStream.close();
+            }
+            const generation = ++liveStreamGeneration;
+            const es = new EventSource('/ui/stream?' + getPeriodQueryString(currentPeriod));
+            liveStream = es;
+            es.onopen = function() { console.log('[SSE] Connected'); };
+            es.onmessage = function(event) {
+                if (generation !== liveStreamGeneration || liveStream !== es) return;
+                try {
+                    const d = JSON.parse(event.data);
+                    if (d.stats)     renderStats(d.stats);
+                    if (d.pending)   renderPending(d.pending);
+                    if (d.completed) renderCompleted(d.completed);
+                    if (d.activity)  renderActivity(d.activity);
+                    updateDebugStamp('requests', `SSE • ${(d.stats?.pendingRequests || 0)} pending`);
+                } catch (e) { console.error('[SSE] render error:', e); }
+            };
+            es.onerror = function() {
+                if (generation !== liveStreamGeneration) return;
+                es.close();
+                if (liveStream === es) {
+                    liveStream = null;
+                }
+                if (_sseRetryTimeout) clearTimeout(_sseRetryTimeout);
+                _sseRetryTimeout = setTimeout(connectSSE, 3000);
+                console.warn('[SSE] Disconnected, retrying...');
+            };
+        }
+        function reconnectSSE() {
+            if (_sseRetryTimeout) {
+                clearTimeout(_sseRetryTimeout);
+                _sseRetryTimeout = null;
+            }
+            connectSSE();
+        }
+        try { connectSSE(); console.log('[Init] ✓ SSE'); } catch(e) { console.error('[Init] ✗ SSE:', e); }
+        try { fetch('/ui/config').then(r=>r.json()).then(cfg=>{applyConfigToUI(cfg);console.log('[Init] ✓ config applied')}).catch(e=>console.error('[Init] ✗ config:',e)); } catch(e) { console.error('[Init] ✗ config dispatch:', e); }
+        try { loadRequests().then(()=>console.log('[Init] ✓ requests')).catch(e=>console.error('[Init] ✗ requests:',e)); } catch(e) { console.error('[Init] ✗ requests dispatch:', e); }
+        try { loadActivity().then(()=>console.log('[Init] ✓ activity')).catch(e=>console.error('[Init] ✗ activity:',e)); } catch(e) { console.error('[Init] ✗ activity dispatch:', e); }
+        try { loadInspector().then(()=>console.log('[Init] ✓ inspector')).catch(e=>console.error('[Init] ✗ inspector:',e)); } catch(e) { console.error('[Init] ✗ inspector dispatch:', e); }
+        try { loadBookmarks().then(()=>console.log('[Init] ✓ bookmarks')).catch(e=>console.error('[Init] ✗ bookmarks:',e)); } catch(e) { console.error('[Init] ✗ bookmarks dispatch:', e); }
+        try { loadModels().then(()=>console.log('[Init] ✓ models')).catch(e=>console.error('[Init] ✗ models:',e)); } catch(e) { console.error('[Init] ✗ models dispatch:', e); }
+        try { pollHandles = [ setInterval(loadInspector, 5000) ]; console.log('[Init] ✓ poll'); } catch(e) { console.error('[Init] ✗ poll:', e); }
+        console.log('[Init] All dispatched');
     </script>
 </body>
 </html>

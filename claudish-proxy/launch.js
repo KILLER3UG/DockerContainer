@@ -2,10 +2,21 @@ const http = require('http');
 const readline = require('readline');
 const { spawn } = require('child_process');
 const path = require('path');
-const { saveProfile } = require('./utils/config');
+const { saveProfile, getProfile } = require('./utils/config');
 
 const PROXY_URL = 'http://localhost:8085';
 const IS_TTY = process.stdin.isTTY;
+const CLAUDE_CLIENT_MODEL_ALIAS = process.env.CLAUDISH_CLAUDE_ALIAS || 'claude-opus-4-6';
+const CODEX_CLIENT_MODEL_ALIAS = 'gpt-4o';
+
+function hasExplicitModelArg(args) {
+    for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        if (arg === '--model' || arg === '-m') return true;
+        if (typeof arg === 'string' && (arg.startsWith('--model=') || arg.startsWith('-m='))) return true;
+    }
+    return false;
+}
 
 function question(prompt) {
     return new Promise((resolve) => {
@@ -44,6 +55,25 @@ async function fetchModels() {
 
 function updateConfig(tool, model) {
     try {
+        if (tool === 'claude') {
+            const existingProfile = getProfile('claude') || {};
+            const preservedAlias = typeof existingProfile.currentModel === 'string' && existingProfile.currentModel.toLowerCase().startsWith('claude-')
+                ? existingProfile.currentModel
+                : CLAUDE_CLIENT_MODEL_ALIAS;
+
+            saveProfile('claude', {
+                ...existingProfile,
+                currentModel: preservedAlias,
+                _upstreamModel: model.id,
+                targetUrl: model.url,
+                apiKey: model.key || ''
+            });
+            console.log(`[launch] Set claude upstream model -> "${model.id}"`);
+            console.log(`[launch] Preserving claude public alias -> "${preservedAlias}"`);
+            console.log(`[launch] Set claude provider -> "${model.provider}" (${model.url})`);
+            return;
+        }
+
         saveProfile(tool, {
             currentModel: model.id,
             targetUrl: model.url,
@@ -120,7 +150,11 @@ async function main() {
         env.ANTHROPIC_BASE_URL = `${PROXY_URL}/v1`;
         env.ANTHROPIC_API_KEY = 'lm-studio';
         env.ANTHROPIC_AUTH_TOKEN = 'lm-studio';
-        args = ['--model', selectedModel?.id || 'claude-sonnet-4-6', ...extraArgs];
+        // Keep the client pinned to a Claude-shaped alias while the proxy
+        // routes to the real upstream model configured in config.json.
+        args = hasExplicitModelArg(extraArgs)
+            ? [...extraArgs]
+            : ['--model', CLAUDE_CLIENT_MODEL_ALIAS, ...extraArgs];
     } else {
         env.OPENAI_API_KEY = 'local-proxy';
         args = [
@@ -129,9 +163,7 @@ async function main() {
             '-c', 'model_providers.openai-custom.base_url=' + PROXY_URL + '/v1',
             '-c', 'model_providers.openai-custom.name=Proxy'
         ];
-        if (selectedModel) {
-            args.push('-m', selectedModel.id);
-        }
+        args.push('-m', CODEX_CLIENT_MODEL_ALIAS);
         args.push(...extraArgs);
     }
 

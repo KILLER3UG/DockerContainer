@@ -1,14 +1,124 @@
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { getConfig, saveConfig, getProfile, saveProfile, getBookmarks, saveBookmark, deleteBookmark } = require('./utils/config');
-const { getActivityLog, startRequest, endRequest, getRequestLog, getPendingRequests, getRequestDetails, getRequestDetail } = require('./utils/logger');
+const { getActivityLog, startRequest, endRequest, getRequestLog, getPendingRequests, getFilteredRequests, getStats, getRequestDetails, getRequestDetail, addSSEClient, removeSSEClient } = require('./utils/logger');
 const anthropicAdapter = require('./adapters/anthropic');
 const openaiAdapter = require('./adapters/openai');
+const { startMcpServers } = require('./utils/mcp-client');
 
 const UI_PATH = path.join(__dirname, 'ui.html');
 
-const server = http.createServer((req, res) => {
+function summarizeRequestHeaders(headers) {
+    const result = {};
+    Object.entries(headers || {}).forEach(([key, value]) => {
+        const lowered = String(key || '').toLowerCase();
+        if (lowered.includes('auth') || lowered.includes('key') || lowered.includes('token') || lowered.includes('cookie')) return;
+        result[key] = value;
+    });
+    return result;
+}
+
+function getPeriodContext(url) {
+    return {
+        tzOffsetMinutes: url.searchParams.get('tzOffsetMinutes'),
+        weekStartsOn: url.searchParams.get('weekStartsOn')
+    };
+}
+
+function stripKnownSuffixes(value) {
+    return value
+        .replace(/\/v1\/messages$/i, '')
+        .replace(/\/messages$/i, '')
+        .replace(/\/v1\/chat\/completions$/i, '')
+        .replace(/\/chat\/completions$/i, '')
+        .replace(/\/v1\/responses$/i, '')
+        .replace(/\/responses$/i, '')
+        .replace(/\/v1\/models$/i, '')
+        .replace(/\/models$/i, '');
+}
+
+function normalizeOpenAIBaseUrl(baseUrl) {
+    let normalized = stripKnownSuffixes((baseUrl || '').trim());
+    if (!normalized) return '';
+    if (normalized.endsWith('/')) normalized = normalized.slice(0, -1);
+    if (/^https:\/\/api\.minimax\.io\/anthropic$/i.test(normalized)) {
+        return 'https://api.minimax.io/v1';
+    }
+    if (!/\/v\d+$/i.test(normalized) && !/\/api\/v\d+$/i.test(normalized)) normalized += '/v1';
+    return normalized;
+}
+
+function normalizeAnthropicBaseUrl(baseUrl) {
+    let normalized = stripKnownSuffixes((baseUrl || '').trim());
+    if (!normalized) return '';
+    if (normalized.endsWith('/')) normalized = normalized.slice(0, -1);
+    if (/^https:\/\/api\.minimax\.io\/v\d+$/i.test(normalized)) {
+        return 'https://api.minimax.io/anthropic';
+    }
+    if (/^https:\/\/api\.anthropic\.com$/i.test(normalized)) {
+        return 'https://api.anthropic.com';
+    }
+    if (/\/v\d+$/i.test(normalized)) {
+        return normalized.replace(/\/v\d+$/i, '');
+    }
+    return normalized;
+}
+
+function buildTargetUrlForProfile(profile, baseUrl) {
+    if (profile === 'claude') {
+        const anthropicBase = normalizeAnthropicBaseUrl(baseUrl);
+        if (!anthropicBase) return '';
+        return `${anthropicBase}/v1/messages`;
+    }
+
+    const openaiBase = normalizeOpenAIBaseUrl(baseUrl);
+    if (!openaiBase) return '';
+    if (/^https:\/\/api\.minimax\.io\/v\d+$/i.test(openaiBase)) {
+        return 'https://api.minimax.io/v1/text/chatcompletion_v2';
+    }
+    return `${openaiBase}/chat/completions`;
+}
+
+function buildModelsUrl(baseUrl) {
+    const openaiBase = normalizeOpenAIBaseUrl(baseUrl);
+    if (!openaiBase) return '';
+    return `${openaiBase}/models`;
+}
+
+function buildTestPayload(profile, model) {
+    if (profile === 'claude') {
+        return {
+            model,
+            max_tokens: 1024,
+            messages: [{ role: 'user', content: 'respond with only the word "WORKING"' }]
+        };
+    }
+
+    return {
+        model,
+        messages: [{ role: 'user', content: 'respond with only the word "WORKING"' }]
+    };
+}
+
+function buildAuthHeaders(apiKey) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (!apiKey) return headers;
+    headers['Authorization'] = `Bearer ${apiKey}`;
+    headers['x-api-key'] = apiKey;
+    return headers;
+}
+
+function buildTestHeaders(profile, apiKey) {
+    const headers = buildAuthHeaders(apiKey);
+    if (profile === 'claude') {
+        headers['anthropic-version'] = '2023-06-01';
+    }
+    return headers;
+}
+
+const server = http.createServer(async (req, res) => {
     // ── URL normalization ──
     const originalUrl = req.url;
     let cleanPath = originalUrl
@@ -17,6 +127,14 @@ const server = http.createServer((req, res) => {
 
     if (originalUrl.includes('/v1/')) {
         console.log(`[Proxy Incoming]: ${req.method} ${originalUrl} -> Normalized: ${cleanPath}`);
+    }
+    if ((req.headers['user-agent'] || '').toLowerCase().includes('claude')) {
+        console.log('[Proxy Debug Bridge Claude Headers]:', JSON.stringify({
+            method: req.method,
+            url: originalUrl,
+            normalized: cleanPath,
+            headers: summarizeRequestHeaders(req.headers)
+        }));
     }
 
     // ── UI endpoints ──
@@ -30,17 +148,45 @@ const server = http.createServer((req, res) => {
         return res.end(JSON.stringify(getConfig()));
     }
 
+    // ── Real-time SSE stream ──
+    if (req.url.startsWith('/ui/stream') && req.method === 'GET') {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const period = url.searchParams.get('period') || 'all';
+        const periodContext = getPeriodContext(url);
+        res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no'  // disable nginx/proxy buffering
+        });
+        res.write(':connected\n\n'); // initial SSE comment to flush headers
+        addSSEClient(res, period, periodContext);
+        req.on('close', () => removeSSEClient(res));
+        return;
+    }
+
     if (req.url === '/ui/activity' && req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify(getActivityLog()));
     }
 
-    if (req.url === '/ui/requests' && req.method === 'GET') {
+    if (req.url.startsWith('/ui/requests') && req.method === 'GET') {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const period = url.searchParams.get('period') || 'all';
+        const periodContext = getPeriodContext(url);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({
             pending: getPendingRequests(),
-            completed: getRequestLog()
+            completed: getFilteredRequests(period, periodContext)
         }));
+    }
+
+    if (req.url.startsWith('/ui/stats') && req.method === 'GET') {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const period = url.searchParams.get('period') || 'all';
+        const periodContext = getPeriodContext(url);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify(getStats(period, periodContext)));
     }
 
     if (req.url === '/ui/save' && req.method === 'POST') {
@@ -54,7 +200,10 @@ const server = http.createServer((req, res) => {
                     targetUrl: data.targetUrl,
                     apiKey: data.apiKey
                 };
+                if (data._upstreamModel !== undefined) profileData._upstreamModel = data._upstreamModel;
                 if (data.contextWindow) profileData.contextWindow = parseInt(data.contextWindow, 10);
+                if (data.inputCostPer1M !== undefined) profileData.inputCostPer1M = Number(data.inputCostPer1M) || 0;
+                if (data.outputCostPer1M !== undefined) profileData.outputCostPer1M = Number(data.outputCostPer1M) || 0;
                 saveProfile(data.profile, profileData);
                 // Also save customProvider to config root if present
                 if (data.customProvider) {
@@ -66,6 +215,12 @@ const server = http.createServer((req, res) => {
                 // Backward compatibility: save to root
                 const config = getConfig();
                 Object.assign(config, data);
+                if (data.requestLogLimit !== undefined) {
+                    config.requestLogLimit = Math.max(100, parseInt(data.requestLogLimit, 10) || 5000);
+                }
+                if (data.pendingRequestTimeoutMinutes !== undefined) {
+                    config.pendingRequestTimeoutMinutes = Math.max(1, parseInt(data.pendingRequestTimeoutMinutes, 10) || 10);
+                }
                 saveConfig(config);
             }
             res.writeHead(200);
@@ -83,9 +238,12 @@ const server = http.createServer((req, res) => {
         return res.end(JSON.stringify(inferred || { inputTokens: 32768, outputTokens: 4096 }));
     }
 
-    if (req.url === '/ui/details' && req.method === 'GET') {
+    if (req.url.startsWith('/ui/details') && req.method === 'GET') {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const period = url.searchParams.get('period') || 'all';
+        const periodContext = getPeriodContext(url);
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify(getRequestDetails()));
+        return res.end(JSON.stringify(getRequestDetails(period, periodContext)));
     }
 
     if (req.url.startsWith('/ui/detail/') && req.method === 'GET') {
@@ -151,9 +309,13 @@ const server = http.createServer((req, res) => {
             }
         })).then(results => {
             const allModels = results.flat();
-            const uniqueModels = Array.from(new Map(allModels.map(m => [m.name, m])).values());
+            const uniqueModels = Array.from(new Map(allModels.map(m => [m.id, m])).values());
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(uniqueModels));
+        }).catch(err => {
+            console.error('[UI /ui/models] Unexpected error:', err.message);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify([])); // always respond so the UI never hangs
         });
         return;
     }
@@ -163,28 +325,30 @@ const server = http.createServer((req, res) => {
         req.on('data', chunk => { body += chunk; });
         req.on('end', async () => {
             const testData = JSON.parse(body);
+            const profile = testData.profile === 'claude' ? 'claude' : 'codex';
+            const reqId = startRequest({ clientType: profile, endpoint: '/ui/test', model: testData.model || 'unknown' });
             try {
                 const response = await fetch(testData.targetUrl, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${testData.apiKey}`
-                    },
-                    body: JSON.stringify({
-                        model: testData.model,
-                        messages: [{ role: 'user', content: 'respond with only the word "WORKING"' }]
-                    }),
+                    headers: buildTestHeaders(profile, testData.apiKey),
+                    body: JSON.stringify(buildTestPayload(profile, testData.model)),
                     signal: AbortSignal.timeout(30000)
                 });
                 const text = await response.text();
-                if (!response.ok) throw new Error(`HTTP ${response.status}: ${text}`);
+                if (!response.ok) throw new Error(`HTTP ${response.status} at ${testData.targetUrl}: ${text}`);
                 let data = JSON.parse(text);
                 if (data.data && data.data.choices) data = data.data;
+                const usage = data.usage || {};
+                const inputTokens = usage.prompt_tokens || usage.input_tokens || 0;
+                const outputTokens = usage.completion_tokens || usage.output_tokens || 0;
                 const choice = data.choices?.[0];
-                const content = choice?.message?.content || choice?.message?.reasoning || 'No content returned';
+                const contentBlock = Array.isArray(data.content) ? data.content.find(part => part.type === 'text') : null;
+                const content = contentBlock?.text || choice?.message?.content || choice?.message?.reasoning || 'No content returned';
+                endRequest(reqId, { status: 'success', model: testData.model, inputTokens, outputTokens });
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: true, content }));
             } catch (e) {
+                endRequest(reqId, { status: 'error', model: testData.model, error: e.message });
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: false, error: e.message }));
             }
@@ -202,26 +366,21 @@ const server = http.createServer((req, res) => {
                     res.writeHead(400, { 'Content-Type': 'application/json' });
                     return res.end(JSON.stringify({ error: 'Base URL is required' }));
                 }
-                // Normalize baseUrl
-                let normalized = baseUrl.trim();
-                if (normalized.endsWith('/')) normalized = normalized.slice(0, -1);
-                if (!normalized.includes('/v1')) normalized += '/v1';
-
-                const fetchUrl = `${normalized}/models`;
+                const fetchUrl = buildModelsUrl(baseUrl);
                 console.log(`[Custom Provider]: Fetching models from ${fetchUrl}`);
                 const fetchRes = await fetch(fetchUrl, {
-                    headers: apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {},
+                    headers: buildAuthHeaders(apiKey),
                     signal: AbortSignal.timeout(15000)
                 });
-                if (!fetchRes.ok) throw new Error(`HTTP ${fetchRes.status}`);
-                const data = await fetchRes.json();
+                const raw = await fetchRes.text();
+                if (!fetchRes.ok) throw new Error(`HTTP ${fetchRes.status} at ${fetchUrl}: ${raw}`);
+                const data = JSON.parse(raw);
                 const models = (data.data || []).map(m => ({
                     id: m.id,
                     name: `[Custom] ${m.id}`,
                     provider: 'Custom',
-                    url: `${normalized}/chat/completions`,
-                    base: normalized,
-                    key: apiKey || ''
+                    url: fetchUrl,
+                    base: normalizeOpenAIBaseUrl(baseUrl)
                 }));
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify(models));
@@ -238,34 +397,35 @@ const server = http.createServer((req, res) => {
         let body = '';
         req.on('data', chunk => { body += chunk; });
         req.on('end', async () => {
+            const parsed = JSON.parse(body);
+            const resolvedProfile = parsed.profile === 'claude' ? 'claude' : 'codex';
+            const reqId = startRequest({ clientType: resolvedProfile, endpoint: '/ui/custom-test', model: parsed.model || 'unknown' });
             try {
-                const { baseUrl, apiKey, model } = JSON.parse(body);
-                let normalized = (baseUrl || '').trim();
-                if (normalized.endsWith('/')) normalized = normalized.slice(0, -1);
-                if (!normalized.includes('/v1')) normalized += '/v1';
-                const targetUrl = `${normalized}/chat/completions`;
+                const targetUrl = buildTargetUrlForProfile(resolvedProfile, parsed.baseUrl);
+                if (!targetUrl) throw new Error('Base URL is required');
+                if (!parsed.model) throw new Error('Select a model first or click Fetch Models before testing');
 
                 const response = await fetch(targetUrl, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${apiKey}`
-                    },
-                    body: JSON.stringify({
-                        model: model || 'default',
-                        messages: [{ role: 'user', content: 'respond with only the word "WORKING"' }]
-                    }),
+                    headers: buildTestHeaders(resolvedProfile, parsed.apiKey),
+                    body: JSON.stringify(buildTestPayload(resolvedProfile, parsed.model)),
                     signal: AbortSignal.timeout(30000)
                 });
                 const text = await response.text();
-                if (!response.ok) throw new Error(`HTTP ${response.status}: ${text}`);
+                if (!response.ok) throw new Error(`HTTP ${response.status} at ${targetUrl}: ${text}`);
                 let data = JSON.parse(text);
                 if (data.data && data.data.choices) data = data.data;
+                const usage = data.usage || {};
+                const inputTokens = usage.prompt_tokens || usage.input_tokens || 0;
+                const outputTokens = usage.completion_tokens || usage.output_tokens || 0;
                 const choice = data.choices?.[0];
-                const content = choice?.message?.content || choice?.message?.reasoning || 'No content returned';
+                const contentBlock = Array.isArray(data.content) ? data.content.find(part => part.type === 'text') : null;
+                const content = contentBlock?.text || choice?.message?.content || choice?.message?.reasoning || 'No content returned';
+                endRequest(reqId, { status: 'success', model: parsed.model, inputTokens, outputTokens });
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: true, content }));
             } catch (e) {
+                endRequest(reqId, { status: 'error', model: parsed.model, error: e.message });
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: false, error: e.message }));
             }
@@ -284,12 +444,12 @@ const server = http.createServer((req, res) => {
         req.on('data', chunk => { body += chunk; });
         req.on('end', () => {
             try {
-                const { name, baseUrl, apiKey } = JSON.parse(body);
+                const { name, baseUrl, apiKey, inputCostPer1M, outputCostPer1M } = JSON.parse(body);
                 if (!name || !baseUrl) {
                     res.writeHead(400, { 'Content-Type': 'application/json' });
                     return res.end(JSON.stringify({ error: 'Name and baseUrl are required' }));
                 }
-                saveBookmark(name, baseUrl, apiKey || '');
+                saveBookmark(name, baseUrl, apiKey || '', inputCostPer1M, outputCostPer1M);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: true, bookmarks: getBookmarks() }));
             } catch (e) {
@@ -307,35 +467,120 @@ const server = http.createServer((req, res) => {
         return res.end(JSON.stringify({ success: removed, bookmarks: getBookmarks() }));
     }
 
+    // ── Web Search (DuckDuckGo) ──
+    if (req.url.startsWith('/search') && req.method === 'GET') {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const query = url.searchParams.get('q');
+        if (!query) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: 'Missing q parameter' }));
+        }
+        try {
+            const searchUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_redirect=1`;
+            const response = await fetch(searchUrl, {
+                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ClaudishProxy/1.0)' },
+                signal: AbortSignal.timeout(10000)
+            });
+            const data = await response.json();
+            // Extract top results
+            const results = (data.RelatedTopics || []).slice(0, 10).map(t => ({
+                title: t.Text || '',
+                url: t.FirstURL || '',
+                snippet: (t.Text || '').substring(0, 200)
+            })).filter(r => r.url);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+                query: query,
+                results: results,
+                abstract: data.AbstractText || ''
+            }));
+        } catch (e) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: e.message }));
+        }
+    }
+
+    // ── Web Fetch (generic URL) ──
+    if (req.url.startsWith('/fetch') && req.method === 'GET') {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const targetUrl = url.searchParams.get('url');
+        if (!targetUrl) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: 'Missing url parameter' }));
+        }
+        try {
+            const parsed = new URL(targetUrl);
+            // Block internal addresses
+            const blocked = [
+                /^http:\/\/localhost/i, /^https?:\/\/127\./i,
+                /^https?:\/\/10\./i, /^https?:\/\/192\.168\./i,
+                /^https?:\/\/172\.(1[6-9]|2[0-9]|3[01])\./i,
+                /^https?:\/\/0\./i, /^https?:\/\/\//i
+            ];
+            if (blocked.some(p => p.test(targetUrl))) {
+                res.writeHead(403, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ error: 'Access to internal/network addresses is not permitted' }));
+            }
+            const protocol = parsed.protocol === 'https:' ? https : http;
+            const proxyReq = protocol.get(targetUrl, {
+                headers: { 'User-Agent': 'ClaudishProxy/1.0', 'Accept': '*/*' }
+            }, function(proxyRes) {
+                let data = '';
+                proxyRes.on('data', function(chunk) { data += chunk; });
+                proxyRes.on('end', function() {
+                    if (data.length > 500000) data = data.substring(0, 500000) + '\n\n[Output truncated]';
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        status: proxyRes.statusCode,
+                        headers: proxyRes.headers,
+                        contentType: proxyRes.headers['content-type'] || '',
+                        body: data
+                    }));
+                });
+            });
+            proxyReq.on('error', function(e) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: e.message }));
+            });
+            proxyReq.setTimeout(15000, function() {
+                proxyReq.destroy();
+                res.writeHead(504, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Request timed out after 15s' }));
+            });
+        } catch (e) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: 'Invalid URL: ' + e.message }));
+        }
+        return;
+    }
+
     // ── Fake model list (shared) ──
     if (cleanPath.includes('/v1/models')) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({
             data: [
+                { id: 'claude-opus-4-7' },
+                { id: 'claude-opus-4-6' },
                 { id: 'claude-sonnet-4-6' },
-                { id: 'gpt-5.4' },
-                { id: 'gpt-5.5' },
                 { id: 'gpt-4o' }
             ]
         }));
     }
 
+    // ── /v1/messages/count_tokens — proxy and log (must be before the /v1/messages catch-all) ──
+    if (cleanPath.includes('/v1/messages/count_tokens')) {
+        const reqId = startRequest({ clientType: 'claude', endpoint: cleanPath });
+        return anthropicAdapter.handleCountTokens(req, res, cleanPath, reqId);
+    }
+
     // ── Provider-specific adapters ──
     if (cleanPath.includes('/v1/chat/completions') || cleanPath.includes('/v1/responses')) {
         const reqId = startRequest({ clientType: 'codex', endpoint: cleanPath });
-        res.on('finish', () => {
-            const cfg = getProfile('codex');
-            endRequest(reqId, { status: res.statusCode >= 400 ? 'error' : 'success', model: cfg.currentModel });
-        });
         return openaiAdapter.handleChatCompletions(req, res, cleanPath, reqId);
     }
 
     if (cleanPath.includes('/v1/messages')) {
         const reqId = startRequest({ clientType: 'claude', endpoint: cleanPath });
-        res.on('finish', () => {
-            const cfg = getProfile('claude');
-            endRequest(reqId, { status: res.statusCode >= 400 ? 'error' : 'success', model: cfg.currentModel });
-        });
         return anthropicAdapter.handleMessages(req, res, cleanPath, reqId);
     }
 
@@ -345,4 +590,15 @@ const server = http.createServer((req, res) => {
 });
 
 console.log('--- AI Adapter Active on Port 8080 ---');
-server.listen(8080, '0.0.0.0');
+
+// Initialize MCP Servers async (if enabled)
+// Will use config key if available, or fallback to env var
+const claudeProfile = getProfile('claude');
+startMcpServers(claudeProfile?.apiKey || '').then(() => {
+    server.listen(8080, '0.0.0.0');
+    console.log('[bridge] Server is listening...');
+}).catch(e => {
+    console.error('[bridge] Failed to start MCP servers:', e);
+    // Start anyway so proxy doesn't completely die if MCP fails
+    server.listen(8080, '0.0.0.0');
+});
