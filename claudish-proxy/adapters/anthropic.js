@@ -702,14 +702,26 @@ function buildAnthropicUpstreamRequest(aReq, cfg, upstreamModelOverride) {
     if (preferredTopK !== undefined) upstreamReq.top_k = preferredTopK;
     if (aReq.thinking !== undefined) upstreamReq.thinking = aReq.thinking;
     if (aReq.stop_sequences) upstreamReq.stop_sequences = aReq.stop_sequences;
+    const openAiToAnthropicTool = (tool) => {
+        if (tool && tool.type === 'function') {
+            return {
+                name: tool.function.name,
+                description: tool.function.description || '',
+                input_schema: tool.function.parameters || { type: 'object', properties: {} }
+            };
+        }
+        return tool;
+    };
+
     if (aReq.tools && aReq.tools.length > 0) {
-        // Smart client (e.g. Claude Code). Only inject MCP tools, skip August tools to prevent collisions.
-        upstreamReq.tools = [ ...aReq.tools, ...getMcpToolDefinitions() ];
+        // Smart client (e.g. Claude Desktop). The client manages its own tools.
+        // DO NOT inject proxy tools here, otherwise the client will crash when the AI tries to use them.
+        upstreamReq.tools = [ ...aReq.tools ];
     } else {
         // Dumb client (e.g. Mobile App). Inject both MCP and August native execution tools.
-        const mcpTools = getMcpToolDefinitions();
-        const augustTools = getAugustToolDefinitions();
-        upstreamReq.tools = [ ...mcpTools, ...augustTools ];
+        const mappedMcpTools = getMcpToolDefinitions().map(openAiToAnthropicTool);
+        const mappedAugustTools = getAugustToolDefinitions().map(openAiToAnthropicTool);
+        upstreamReq.tools = [ ...mappedMcpTools, ...mappedAugustTools ];
     }
     if (aReq.tool_choice) upstreamReq.tool_choice = aReq.tool_choice;
     if (aReq.metadata) upstreamReq.metadata = aReq.metadata;

@@ -125,6 +125,23 @@ const AUGUST_TOOLS = [
                 required: ['section', 'content']
             }
         }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'august__spawn_background_task',
+            description: 'Spawns a detached PowerShell script that will run in the background indefinitely. Use this for massive scraping jobs, long compiles, or starting watcher servers. The output is streamed to august_background.log',
+            parameters: {
+                type: 'object',
+                properties: {
+                    script_content: {
+                        type: 'string',
+                        description: 'The exact PowerShell script content to execute in the background.'
+                    }
+                },
+                required: ['script_content']
+            }
+        }
     }
 ];
 
@@ -175,6 +192,22 @@ async function executeAugustToolCall(toolName, args) {
                 replaceMem[args.section] = args.content;
                 writeAugustCoreMemory(replaceMem);
                 return `Successfully replaced ${args.section} memory.`;
+
+            case 'august__spawn_background_task':
+                const scriptName = path.join(__dirname, '..', `august_bg_task_${Date.now()}.ps1`);
+                fs.writeFileSync(scriptName, args.script_content, 'utf8');
+                const outLog = path.join(__dirname, '..', 'august_background.log');
+                
+                // Spawn detached powershell process
+                const { spawn } = require('child_process');
+                const child = spawn('powershell.exe', ['-ExecutionPolicy', 'Bypass', '-File', scriptName], {
+                    detached: true,
+                    stdio: ['ignore', fs.openSync(outLog, 'a'), fs.openSync(outLog, 'a')]
+                });
+                
+                child.unref(); // Allow the main proxy to exit without waiting for this child
+                
+                return `Background task successfully spawned (PID: ${child.pid}). The script was saved to ${scriptName} and its output is actively streaming into august_background.log. You can continue interacting with the user immediately.`;
 
             default:
                 throw new Error(`Unknown august tool: ${toolName}`);

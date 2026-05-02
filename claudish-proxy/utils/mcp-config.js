@@ -23,6 +23,17 @@ module.exports = {
             // Clean markdown web fetching
             command: 'npx',
             args: ['-y', '@modelcontextprotocol/server-fetch']
+        },
+        {
+            name: 'blender',
+            // Control Blender via MCP (requires Blender addon to be running)
+            command: 'node',
+            args: ['/app/claudekit-blender-mcp/dist/index.js'],
+            env: {
+                // Must use host.docker.internal because the proxy is inside Docker but Blender is on the Windows Host
+                BLENDER_HOST: 'host.docker.internal',
+                BLENDER_PORT: '9876'
+            }
         }
     ]
 };

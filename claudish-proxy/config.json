@@ -1,6 +1,6 @@
 {
   "claude": {
-    "currentModel": "claude-opus-4-7",
+    "currentModel": "claude-sonnet-4-6",
     "targetUrl": "https://api.minimax.io/anthropic/v1/messages",
     "apiKey": "sk-cp-XCBVUifgJiT09KyY77bytczKTfRe5T3riqFfGcaF3UEEv5KhH9xKbDd9YBU1mIzQPWSTFGgvnREWliN6xQRDayl37PqlV-z0pLJabBes4s904-jhZ5fu-IA",
     "_upstreamModel": "MiniMax-M2.7",
@@ -38,5 +38,5 @@
     "apiKey": "sk-cp-XCBVUifgJiT09KyY77bytczKTfRe5T3riqFfGcaF3UEEv5KhH9xKbDd9YBU1mIzQPWSTFGgvnREWliN6xQRDayl37PqlV-z0pLJabBes4s904-jhZ5fu-IA"
   },
   "requestLogLimit": 1000000000,
-  "pendingRequestTimeoutMinutes": 30
+  "pendingRequestTimeoutMinutes": 1000
 }

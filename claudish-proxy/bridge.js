@@ -567,21 +567,45 @@ const server = http.createServer(async (req, res) => {
         }));
     }
 
-    // ── /v1/messages/count_tokens — proxy and log (must be before the /v1/messages catch-all) ──
-    if (cleanPath.includes('/v1/messages/count_tokens')) {
-        const reqId = startRequest({ clientType: 'claude', endpoint: cleanPath });
-        return anthropicAdapter.handleCountTokens(req, res, cleanPath, reqId);
-    }
-
-    // ── Provider-specific adapters ──
-    if (cleanPath.includes('/v1/chat/completions') || cleanPath.includes('/v1/responses')) {
-        const reqId = startRequest({ clientType: 'codex', endpoint: cleanPath });
-        return openaiAdapter.handleChatCompletions(req, res, cleanPath, reqId);
-    }
-
-    if (cleanPath.includes('/v1/messages')) {
-        const reqId = startRequest({ clientType: 'claude', endpoint: cleanPath });
-        return anthropicAdapter.handleMessages(req, res, cleanPath, reqId);
+    // ── August Core Security Gateway ──
+    if (cleanPath.startsWith('/v1/')) {
+        // Start request logging immediately so it shows up in the UI even if blocked
+        let clientType = 'unknown';
+        if (cleanPath.includes('/chat/completions') || cleanPath.includes('/responses')) clientType = 'codex';
+        else if (cleanPath.includes('/messages')) clientType = 'claude';
+        
+        const reqId = startRequest({ clientType, endpoint: cleanPath });
+        
+        const config = getConfig();
+        const expectedKey = config.august_secret_key || 'august-core-key';
+        
+        const authHeader = req.headers['authorization'] || '';
+        const xApiKey = req.headers['x-api-key'] || '';
+        const xAugustKey = req.headers['x-august-key'] || '';
+        
+        const providedKey = (xAugustKey) || (xApiKey) || (authHeader.replace('Bearer ', '').trim());
+        
+        // Auto-bypass for Docker local networks (172.x) and localhost (127.x, ::1)
+        const ip = req.socket.remoteAddress || '';
+        const isLocal = ip.includes('127.0.0.1') || ip === '::1' || ip.startsWith('172.') || ip.startsWith('::ffff:172.') || ip.startsWith('192.168.');
+        
+        if (providedKey !== expectedKey && !isLocal) {
+            console.warn(`[Security Alert]: Blocked unauthorized access attempt to ${cleanPath} from IP ${ip}`);
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: { type: 'authentication_error', message: 'Unauthorized: Invalid August Core Security Key' }}));
+            return endRequest(reqId, { status: 'error', error: 'Blocked by Security Gateway (Invalid Key)' });
+        }
+        
+        // If passed, route to the correct handler
+        if (cleanPath.includes('/v1/messages/count_tokens')) {
+            return anthropicAdapter.handleCountTokens(req, res, cleanPath, reqId);
+        }
+        if (clientType === 'codex') {
+            return openaiAdapter.handleChatCompletions(req, res, cleanPath, reqId);
+        }
+        if (clientType === 'claude') {
+            return anthropicAdapter.handleMessages(req, res, cleanPath, reqId);
+        }
     }
 
     // Fallback
