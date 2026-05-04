@@ -1536,17 +1536,20 @@
             const normalizedTargetUrl = normalizeTargetUrlForProfile(profile, opt.dataset.base || opt.dataset.url || document.getElementById('customBaseUrl').value);
             document.getElementById(profile + 'TargetUrl').value = normalizedTargetUrl;
             document.getElementById(profile + 'ApiKey').value = document.getElementById('customApiKey').value;
-            document.getElementById(profile + 'StatusModel').innerText = profile === 'claude' ? getClaudePublicAliasValue() : opt.value;
+            const publicModel = profile === 'claude' ? getClaudePublicAliasValue() : 'gpt-5.4';
+            const upstreamModel = opt.value;
+
+            document.getElementById(profile + 'StatusModel').innerText = publicModel;
             document.getElementById(profile + 'StatusProvider').innerText = 'Custom';
             // Copy cost values from Custom Provider inputs
             document.getElementById(profile + 'InputCostPer1M').value = document.getElementById('customInputCostPer1M').value || '';
             document.getElementById(profile + 'OutputCostPer1M').value = document.getElementById('customOutputCostPer1M').value || '';
-            if (previousModel && previousModel !== opt.value) clearProfileContextState(profile);
+            if (previousModel && previousModel !== upstreamModel) clearProfileContextState(profile);
             if (!currentConfigState[profile]) currentConfigState[profile] = {};
             currentConfigState[profile] = {
                 ...currentConfigState[profile],
-                currentModel: profile === 'claude' ? getClaudePublicAliasValue() : opt.value,
-                _upstreamModel: profile === 'claude' ? opt.value : currentConfigState[profile]?._upstreamModel,
+                currentModel: publicModel,
+                _upstreamModel: upstreamModel,
                 targetUrl: normalizedTargetUrl,
                 apiKey: document.getElementById('customApiKey').value || ''
             };

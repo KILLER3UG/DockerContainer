@@ -565,12 +565,16 @@ const server = http.createServer(async (req, res) => {
     // ── Fake model list (shared) ──
     if (cleanPath.includes('/v1/models')) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
+        const now = Math.floor(Date.now() / 1000);
         return res.end(JSON.stringify({
+            object: "list",
             data: [
-                { id: 'claude-opus-4-7' },
-                { id: 'claude-opus-4-6' },
-                { id: 'claude-sonnet-4-6' },
-                { id: 'gpt-4o' }
+                { id: 'claude-opus-4-7', object: 'model', created: now, owned_by: 'claudish' },
+                { id: 'claude-opus-4-6', object: 'model', created: now, owned_by: 'claudish' },
+                { id: 'claude-sonnet-4-6', object: 'model', created: now, owned_by: 'claudish' },
+                { id: 'gpt-5.4', object: 'model', created: now, owned_by: 'claudish' },
+                { id: 'gpt-4o', object: 'model', created: now, owned_by: 'claudish' },
+                { id: 'gpt-4-turbo', object: 'model', created: now, owned_by: 'claudish' }
             ]
         }));
     }

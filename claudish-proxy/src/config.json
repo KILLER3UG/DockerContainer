@@ -10,11 +10,12 @@
     "contextModelId": "MiniMax-M2.7"
   },
   "codex": {
-    "currentModel": "meta/llama-3.1-405b-instruct",
-    "targetUrl": "https://integrate.api.nvidia.com/v1/chat/completions",
-    "apiKey": "${env:NVIDIA_API_KEY}",
-    "contextWindow": 131072,
-    "contextModelId": "meta/llama-3.1-405b-instruct"
+    "currentModel": "MiniMax-M2.7",
+    "targetUrl": "https://api.minimax.io/v1/text/chatcompletion_v2",
+    "apiKey": "${env:MINIMAX_API_KEY}",
+    "contextWindow": 190512,
+    "inputCostPer1M": 0,
+    "outputCostPer1M": 0
   },
   "bookmarks": [
     {

@@ -242,8 +242,23 @@ async function handleChatCompletions(req, res, cleanPath, reqId) {
                 oReq.messages.unshift({ role: 'system', content: windowsSystemPrompt });
             }
 
-            // ── Dynamic model hijacking (Ollama-style) ──
-            requestModel = cfg.currentModel || oReq.model;
+            // ── Model Resolution (Alias Mapping) ──
+            const requestedModel = oReq.model || 'gpt-5.4';
+            let requestModel = cfg._upstreamModel || cfg.currentModel || requestedModel;
+            
+            // Handle explicit aliases (just like in Claude profile)
+            if (requestedModel === 'gpt-5.4' || requestedModel === 'gpt-4o' || requestedModel === 'gpt-4-turbo') {
+                requestModel = cfg._upstreamModel || cfg.currentModel;
+            }
+
+            // Handle aliasTargets if defined
+            if (cfg.aliasTargets && cfg.aliasTargets[requestedModel]) {
+                const target = cfg.aliasTargets[requestedModel];
+                requestModel = target.model || target.currentModel || requestModel;
+                if (target.targetUrl || target.url) cfg.targetUrl = target.targetUrl || target.url;
+                if (target.apiKey) cfg.apiKey = target.apiKey;
+            }
+
             const authHeader = req.headers['authorization'] || '';
             if (authHeader.includes('Bearer model:')) {
                 const extractedModel = authHeader.split('model:')[1].trim();
