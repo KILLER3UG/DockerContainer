@@ -1142,12 +1142,21 @@
 
         function normalizeTargetUrlForProfile(profile, targetUrl) {
             if (!targetUrl) return '';
+            const lower = targetUrl.toLowerCase();
+            // Detect if this is likely an OpenAI-compatible endpoint
+            const isOpenAI = lower.includes('openai.com') || 
+                             lower.includes('openrouter.ai') || 
+                             lower.includes('groq.com') || 
+                             lower.includes('completions') ||
+                             lower.includes('localhost:11434');
+
             try {
-                const parsed = new URL(stripKnownEndpointSuffixes(targetUrl));
+                const stripped = stripKnownEndpointSuffixes(targetUrl);
+                const parsed = new URL(stripped);
                 const root = `${parsed.protocol}//${parsed.host}`;
                 const path = parsed.pathname.replace(/\/$/, '');
 
-                if (profile === 'claude') {
+                if (profile === 'claude' && !isOpenAI) {
                     if (parsed.hostname === 'api.minimax.io') return `${root}/anthropic/v1/messages`;
                     if (parsed.hostname === 'api.anthropic.com') return `${root}/v1/messages`;
                     if (/\/anthropic$/i.test(path)) return `${root}${path}/v1/messages`;

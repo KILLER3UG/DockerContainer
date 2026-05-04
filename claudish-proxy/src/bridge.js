@@ -67,7 +67,15 @@ function normalizeAnthropicBaseUrl(baseUrl) {
 }
 
 function buildTargetUrlForProfile(profile, baseUrl) {
-    if (profile === 'claude') {
+    const lowerBase = (baseUrl || '').toLowerCase();
+    // Detect if this is likely an OpenAI-compatible endpoint even if we're in the Claude profile
+    const isOpenAIHint = lowerBase.includes('openai.com') || 
+                         lowerBase.includes('openrouter.ai') || 
+                         lowerBase.includes('groq.com') || 
+                         lowerBase.includes('completions') ||
+                         lowerBase.includes('localhost:11434'); // Ollama default
+
+    if (profile === 'claude' && !isOpenAIHint) {
         const anthropicBase = normalizeAnthropicBaseUrl(baseUrl);
         if (!anthropicBase) return '';
         return `${anthropicBase}/v1/messages`;
