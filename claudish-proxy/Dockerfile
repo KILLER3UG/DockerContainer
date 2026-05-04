@@ -6,8 +6,10 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_UNMANAGED_INSTALL="/usr/
 RUN npm install http-proxy @modelcontextprotocol/sdk
 RUN git clone https://github.com/olbboy/claudekit-blender-mcp.git /app/claudekit-blender-mcp
 RUN cd /app/claudekit-blender-mcp && npm install && npm run build
-COPY bridge.js config.json ui.html ./
-COPY adapters/ ./adapters/
-COPY utils/ ./utils/
+COPY src/ ./src/
+COPY docs/ ./docs/
+COPY scripts/ ./scripts/
+COPY tests/ ./tests/
+COPY request-log.json/ ./request-log.json/
 EXPOSE 8080
-CMD ["node", "bridge.js"]
+CMD ["node", "src/bridge.js"]

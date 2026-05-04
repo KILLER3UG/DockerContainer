@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 
 const CONFIG_PATH = path.join(__dirname, '..', 'config.json');
-const ENV_PATH = path.join(__dirname, '..', '.env');
+const ENV_PATH = path.join(__dirname, '..', '..', '.env');
 
 let envLoaded = false;
 

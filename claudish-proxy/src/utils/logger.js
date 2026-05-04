@@ -5,8 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { getConfig, getProfile } = require('./config');
 
-const REQUEST_LOG_FILE = path.join(__dirname, '..', 'request-log.json');
-const REQUEST_LOG_FALLBACK = path.join(__dirname, '..', 'request-log-data.json');
+const REQUEST_LOG_FILE = path.join(__dirname, '..', '..', 'request-log.json');
 const DEFAULT_REQUEST_LOG_LIMIT = 5000;
 const DEFAULT_PENDING_TIMEOUT_MINUTES = 10;
 const MAX_ACTIVITY_LOG = 200;
@@ -126,10 +125,10 @@ function loadRequestLog() {
     }
 
     try {
-        if (logPath !== REQUEST_LOG_FALLBACK && fs.existsSync(REQUEST_LOG_FALLBACK)) {
-            const fallbackData = JSON.parse(fs.readFileSync(REQUEST_LOG_FALLBACK, 'utf8'));
+        if (logPath !== REQUEST_LOG_FILE && fs.existsSync(REQUEST_LOG_FILE)) {
+            const fallbackData = JSON.parse(fs.readFileSync(REQUEST_LOG_FILE, 'utf8'));
             if (Array.isArray(fallbackData)) {
-                console.log(`[Logger] Loaded ${fallbackData.length} persisted request entries from ${REQUEST_LOG_FALLBACK}`);
+                console.log(`[Logger] Loaded ${fallbackData.length} persisted request entries from ${REQUEST_LOG_FILE}`);
                 const loaded = fallbackData
                     .map(normalizeRequestEntry)
                     .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));

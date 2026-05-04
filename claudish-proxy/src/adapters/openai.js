@@ -1,9 +1,9 @@
-const { getProfile } = require('../utils/config');
-const { logActivity, endRequest, captureRequest, captureResponse, captureTokens, captureError } = require('../utils/logger');
-const { applySelfHealToMessages } = require('../utils/selfheal');
-const { getModelContextWindow, saveModelContextWindow, loadModelContextWindow } = require('../utils/models');
-const { estimateTokens, formatTokenCount } = require('../utils/tokens');
-const { buildFriendlyRateLimitMessage, getRetryDelayMs, isRetryableStatus } = require('../utils/upstream');
+const { getProfile } = require('../../src/utils/config');
+const { logActivity, endRequest, captureRequest, captureResponse, captureTokens, captureError } = require('../../src/utils/logger');
+const { applySelfHealToMessages } = require('../../src/utils/selfheal');
+const { getModelContextWindow, saveModelContextWindow, loadModelContextWindow } = require('../../src/utils/models');
+const { estimateTokens, formatTokenCount } = require('../../src/utils/tokens');
+const { buildFriendlyRateLimitMessage, getRetryDelayMs, isRetryableStatus } = require('../../src/utils/upstream');
 
 // ── Parse SSE stream into a complete Chat Completions JSON object ──
 function parseSSEToJSON(sseText) {

@@ -1,5 +1,5 @@
 // Test web search directly
-const { executeManagedWebTool } = require('./utils/local-web');
+const { executeManagedWebTool } = require('../src/utils/local-web');
 
 async function test() {
     console.log('Testing web_search...');

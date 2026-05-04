@@ -20,12 +20,8 @@ services:
       - NVIDIA_API_KEY=${NVIDIA_API_KEY}
     volumes:
       # Live-mount all source code so changes take effect on container restart (no rebuild needed)
-      - ./bridge.js:/app/bridge.js
-      - ./ui.html:/app/ui.html
-      - ./config.json:/app/config.json
+      - ./src:/app/src
       - ./request-log.json:/app/request-log.json
-      - ./adapters:/app/adapters
-      - ./utils:/app/utils
     ports:
       - "8085:8080"
     extra_hosts:

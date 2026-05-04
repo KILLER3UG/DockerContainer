@@ -5,9 +5,9 @@
     "apiKey": "${env:MINIMAX_API_KEY}",
     "_upstreamModel": "MiniMax-M2.7",
     "contextWindow": 190512,
-    "contextModelId": "MiniMax-M2.7",
     "inputCostPer1M": 0,
-    "outputCostPer1M": 0
+    "outputCostPer1M": 0,
+    "contextModelId": "MiniMax-M2.7"
   },
   "codex": {
     "currentModel": "meta/llama-3.1-405b-instruct",
