@@ -2,6 +2,106 @@ const fs = require('fs');
 const path = require('path');
 
 const CONFIG_PATH = path.join(__dirname, '..', 'config.json');
+const ENV_PATH = path.join(__dirname, '..', '.env');
+
+let envLoaded = false;
+
+function stripWrappingQuotes(value) {
+    if (value.length >= 2) {
+        const first = value[0];
+        const last = value[value.length - 1];
+        if ((first === '"' && last === '"') || (first === '\'' && last === '\'')) {
+            return value.slice(1, -1);
+        }
+    }
+    return value;
+}
+
+function loadLocalEnvFile() {
+    if (envLoaded) return;
+    envLoaded = true;
+
+    if (!fs.existsSync(ENV_PATH)) return;
+
+    try {
+        const lines = fs.readFileSync(ENV_PATH, 'utf8').split(/\r?\n/);
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('#')) continue;
+
+            const separatorIndex = trimmed.indexOf('=');
+            if (separatorIndex === -1) continue;
+
+            const key = trimmed.slice(0, separatorIndex).trim();
+            if (!key || process.env[key] !== undefined) continue;
+
+            const rawValue = trimmed.slice(separatorIndex + 1).trim();
+            process.env[key] = stripWrappingQuotes(rawValue);
+        }
+    } catch (e) {
+        console.warn(`[Config] Warning: failed to load .env file: ${e.message}`);
+    }
+}
+
+loadLocalEnvFile();
+
+// ── Env-var expansion: ${env:VAR_NAME} → process.env.VAR_NAME ──
+// Runs recursively over the config object after loading from disk.
+// The original placeholder strings are preserved on disk — only the
+// in-memory copy has real values, so secrets are never written back.
+function expandEnvVars(value) {
+    if (typeof value === 'string') {
+        return value.replace(/\$\{env:([^}]+)\}/g, (match, varName) => {
+            const resolved = process.env[varName.trim()];
+            if (resolved === undefined) {
+                console.warn(`[Config] Warning: env var '${varName}' referenced in config.json is not set.`);
+                return match; // keep the placeholder so it's obvious something is missing
+            }
+            return resolved;
+        });
+    }
+    if (Array.isArray(value)) return value.map(expandEnvVars);
+    if (value && typeof value === 'object') {
+        const expanded = {};
+        for (const [k, v] of Object.entries(value)) expanded[k] = expandEnvVars(v);
+        return expanded;
+    }
+    return value;
+}
+
+// Strip resolved env values back to placeholders before writing to disk.
+// Matches any value that looks like a real secret (long alphanum strings)
+// against what the env vars hold, and substitutes back the placeholder.
+function collapseEnvVars(resolvedConfig) {
+    // Build a reverse map: resolvedValue -> "${env:VAR_NAME}"
+    const reverseMap = new Map();
+    function collectPlaceholders(raw, resolved) {
+        if (typeof raw === 'string' && typeof resolved === 'string') {
+            const match = raw.match(/^\$\{env:([^}]+)\}$/);
+            if (match && resolved && resolved !== raw) {
+                reverseMap.set(resolved, raw);
+            }
+        } else if (raw && typeof raw === 'object' && resolved && typeof resolved === 'object') {
+            for (const k of Object.keys(raw)) collectPlaceholders(raw[k], resolved[k]);
+        }
+    }
+    try {
+        const onDisk = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+        collectPlaceholders(onDisk, resolvedConfig);
+    } catch (e) { /* ignore — best effort */ }
+
+    function collapseValue(val) {
+        if (typeof val === 'string') return reverseMap.has(val) ? reverseMap.get(val) : val;
+        if (Array.isArray(val)) return val.map(collapseValue);
+        if (val && typeof val === 'object') {
+            const out = {};
+            for (const [k, v] of Object.entries(val)) out[k] = collapseValue(v);
+            return out;
+        }
+        return val;
+    }
+    return collapseValue(resolvedConfig);
+}
 
 let cachedConfig = null;
 let cachedMtime = 0;
@@ -37,7 +137,8 @@ function getConfig() {
     try {
         const stats = fs.statSync(CONFIG_PATH);
         if (!cachedConfig || stats.mtimeMs > cachedMtime) {
-            cachedConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+            const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+            cachedConfig = expandEnvVars(raw); // resolve ${env:VAR} placeholders in-memory
             cachedMtime = stats.mtimeMs;
             console.log('[Config] Reloaded from disk (mtime changed)');
         }
@@ -49,8 +150,11 @@ function getConfig() {
 }
 
 function saveConfig(config) {
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
-    cachedConfig = config;
+    // Collapse resolved env-var values back to ${env:VAR} placeholders before writing.
+    // This prevents secrets from being persisted to disk when the UI saves settings.
+    const safeToWrite = collapseEnvVars(config);
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(safeToWrite, null, 2));
+    cachedConfig = config; // keep the in-memory resolved copy
     try {
         cachedMtime = fs.statSync(CONFIG_PATH).mtimeMs;
     } catch (e) {

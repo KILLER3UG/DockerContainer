@@ -546,6 +546,12 @@ function captureResponse(reqId, responseData) {
     const msg = choice?.message;
     if (msg?.reasoning || msg?.reasoning_content) {
         details.thinking = msg.reasoning || msg.reasoning_content;
+    } else if (Array.isArray(msg?.reasoning_details)) {
+        const reasoningText = msg.reasoning_details
+            .map(detail => detail?.text || detail?.thinking || '')
+            .filter(Boolean)
+            .join('\n\n');
+        if (reasoningText) details.thinking = reasoningText;
     }
     if (msg?.tool_calls && msg.tool_calls.length > 0) {
         details.toolCalls = msg.tool_calls.map(tc => ({
@@ -560,8 +566,10 @@ function captureResponse(reqId, responseData) {
 
     // Extract thinking/tool info from Anthropic native format
     if (Array.isArray(responseData.content)) {
-        const thinkingBlock = responseData.content.find(b => b.type === 'thinking');
-        if (thinkingBlock?.thinking) details.thinking = thinkingBlock.thinking;
+        const thinkingBlocks = responseData.content
+            .filter(b => b.type === 'thinking' && b.thinking)
+            .map(b => b.thinking);
+        if (thinkingBlocks.length > 0) details.thinking = thinkingBlocks.join('\n\n');
 
         const toolBlocks = responseData.content.filter(b => b.type === 'tool_use');
         if (toolBlocks.length > 0) {

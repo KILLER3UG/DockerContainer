@@ -307,7 +307,7 @@ async function handleChatCompletions(req, res, cleanPath, reqId) {
             // Free-tier models default to tiny limits (~256 tokens). Ensure a reasonable minimum.
             // This applies to BOTH Responses API and Chat Completions paths.
             const clientMaxTokens = oReq.max_output_tokens !== undefined ? oReq.max_output_tokens : oReq.max_tokens;
-            const effectiveMaxTokens = Math.max(1024, Math.min(clientMaxTokens || 2048, 4096));
+            const effectiveMaxTokens = Math.max(1024, Math.min(clientMaxTokens || 2048, 65536));
             oReq.max_tokens = effectiveMaxTokens;
             delete oReq.max_output_tokens;
 
@@ -517,19 +517,16 @@ async function handleChatCompletions(req, res, cleanPath, reqId) {
                     function pump() {
                         reader.read().then(({ done, value }) => {
                             if (done) {
-                                let streamInputTokens = 0;
-                                let streamOutputTokens = 0;
-                                for (const line of accumulatedText.split('\n')) {
-                                    if (!line.startsWith('data: ')) continue;
-                                    try {
-                                        const chunk = JSON.parse(line.slice(6).trim());
-                                        if (chunk.usage) {
-                                            streamInputTokens  = chunk.usage.prompt_tokens     || chunk.usage.input_tokens     || streamInputTokens;
-                                            streamOutputTokens = chunk.usage.completion_tokens || chunk.usage.output_tokens || streamOutputTokens;
-                                        }
-                                    } catch (e) { /* ignore */ }
+                                // Reconstruct full response to capture it for debug UI
+                                try {
+                                    const parsed = parseSSEToJSON(accumulatedText);
+                                    captureResponse(reqId, parsed);
+                                    const inTok  = parsed.usage?.prompt_tokens     || parsed.usage?.input_tokens     || 0;
+                                    const outTok = parsed.usage?.completion_tokens || parsed.usage?.output_tokens || 0;
+                                    captureTokens(reqId, inTok, outTok);
+                                } catch (e) {
+                                    console.warn('[Proxy SSE Parse Warning]: Failed to reconstruct OpenAI response for capture:', e.message);
                                 }
-                                captureTokens(reqId, streamInputTokens, streamOutputTokens);
                                 res.end();
                                 finishRequest(); // ← request is now done
                                 return;

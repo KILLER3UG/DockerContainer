@@ -1,8 +1,8 @@
 {
   "claude": {
-    "currentModel": "claude-sonnet-4-6",
+    "currentModel": "claude-opus-4-6",
     "targetUrl": "https://api.minimax.io/anthropic/v1/messages",
-    "apiKey": "sk-cp-XCBVUifgJiT09KyY77bytczKTfRe5T3riqFfGcaF3UEEv5KhH9xKbDd9YBU1mIzQPWSTFGgvnREWliN6xQRDayl37PqlV-z0pLJabBes4s904-jhZ5fu-IA",
+    "apiKey": "${env:MINIMAX_API_KEY}",
     "_upstreamModel": "MiniMax-M2.7",
     "contextWindow": 190512,
     "contextModelId": "MiniMax-M2.7",
@@ -12,7 +12,7 @@
   "codex": {
     "currentModel": "meta/llama-3.1-405b-instruct",
     "targetUrl": "https://integrate.api.nvidia.com/v1/chat/completions",
-    "apiKey": "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",
+    "apiKey": "${env:NVIDIA_API_KEY}",
     "contextWindow": 131072,
     "contextModelId": "meta/llama-3.1-405b-instruct"
   },
@@ -20,22 +20,22 @@
     {
       "name": "NVIDIA NIM",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
-      "apiKey": "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"
+      "apiKey": "${env:NVIDIA_API_KEY}"
     },
     {
       "name": "OpenRouter",
       "baseUrl": "https://openrouter.ai/api/v1",
-      "apiKey": "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"
+      "apiKey": "${env:OPENROUTER_API_KEY}"
     },
     {
       "name": "minimax",
       "baseUrl": "https://api.minimax.io/anthropic",
-      "apiKey": "sk-cp-XCBVUifgJiT09KyY77bytczKTfRe5T3riqFfGcaF3UEEv5KhH9xKbDd9YBU1mIzQPWSTFGgvnREWliN6xQRDayl37PqlV-z0pLJabBes4s904-jhZ5fu-IA"
+      "apiKey": "${env:MINIMAX_API_KEY}"
     }
   ],
   "customProvider": {
     "baseUrl": "https://api.minimax.io/anthropic",
-    "apiKey": "sk-cp-XCBVUifgJiT09KyY77bytczKTfRe5T3riqFfGcaF3UEEv5KhH9xKbDd9YBU1mIzQPWSTFGgvnREWliN6xQRDayl37PqlV-z0pLJabBes4s904-jhZ5fu-IA"
+    "apiKey": "${env:MINIMAX_API_KEY}"
   },
   "requestLogLimit": 1000000000,
   "pendingRequestTimeoutMinutes": 1000

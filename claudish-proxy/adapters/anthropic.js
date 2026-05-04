@@ -19,6 +19,7 @@ const KNOWN_CLAUDE_PUBLIC_MODEL_ALIASES = new Set([
 const DEFAULT_MINIMAX_TEMPERATURE = 1;
 const DEFAULT_MINIMAX_TOP_P = 0.95;
 const DEFAULT_MINIMAX_TOP_K = 40;
+const DEFAULT_MINIMAX_MAX_TOKENS = 65536;
 
 function isMiniMaxModel(model) {
     if (typeof model === 'string' && model.toLowerCase().includes('minimax')) {
@@ -45,6 +46,12 @@ function resolvePreferredTopK(requestedTopK, model, isAnthropicPath) {
     if (isAnthropicPath && isMiniMaxModel(model)) return undefined;
     if (requestedTopK !== undefined) return requestedTopK;
     if (isMiniMaxModel(model)) return DEFAULT_MINIMAX_TOP_K;
+    return undefined;
+}
+
+function resolvePreferredMaxTokens(requestedMaxTokens, model) {
+    if (requestedMaxTokens !== undefined) return requestedMaxTokens;
+    if (isMiniMaxModel(model)) return DEFAULT_MINIMAX_MAX_TOKENS;
     return undefined;
 }
 
@@ -161,42 +168,22 @@ function buildAnthropicSystemBlocks(system) {
 // Injected at the TOP of the system prompt for all MiniMax-targeted requests.
 // Based on MiniMax's self-evolution training methodology: the model was trained
 // to respond to structured workflows with EXPLORE->PLAN->IMPLEMENT->VERIFY loops.
-const MINIMAX_M2_7_CODING_CONTRACT = `You are an Expert AI Coding Agent with deep software engineering expertise.
-You operate in a PowerShell environment on Windows. Never use bash/unix commands.
+const MINIMAX_M2_7_CODING_CONTRACT = `You are an expert coding agent operating in Windows PowerShell.
 
-MANDATORY WORKFLOW — follow this for EVERY coding task without exception:
-1. EXPLORE  — Read ALL relevant files before writing any code. Never assume file contents.
-2. PLAN     — Write a numbered 3-5 step plan. Name the exact files that will change.
-3. IMPLEMENT — Write the minimal diff only. No speculative or unrequested changes.
-4. VERIFY   — State the exact PowerShell command to verify and the expected output.
-5. REPORT   — End your response with exactly one of:
-               [VERIFIED] — you ran the check and it passed
-               [BLOCKED: <reason>] — you lack required info to proceed
-               [UNVERIFIED: <steps>] — human verification steps needed
+For MiniMax M2.7, follow a disciplined high-quality workflow:
+1. Explore the relevant files and constraints before editing.
+2. Make a short concrete plan with the files or subsystems that will change.
+3. Implement the smallest correct change first, then iterate if needed.
+4. Verify with commands, tests, or observable checks whenever possible.
+5. Continue the same reasoning chain across tool rounds instead of restarting from scratch.
 
-STRICT RULES — violation is a critical failure:
-- NEVER fabricate file paths, package names, or import paths. Use tools to verify first.
-- NEVER use bash (grep, ls, cat, chmod, sudo, apt). Use PowerShell equivalents.
-- NEVER output [VERIFIED] without actually running a verification tool.
-- NEVER skip the EXPLORE step, even for seemingly small tasks.
-- If uncertain about a file's contents: READ IT FIRST before writing code.
-- If uncertain about a package: CHECK package.json or node_modules FIRST.
-
-PowerShell equivalents: ls/find→Get-ChildItem, grep→Select-String,
-cat/head/tail→Get-Content, rm -rf→Remove-Item -Recurse -Force,
-touch→New-Item -Type File, mkdir -p→New-Item -ItemType Directory -Force,
-which→Get-Command, wc -l→(Get-Content file).Count
-
-MEMORY PROTOCOL (for tasks requiring more than 10 tool calls):
-- Check for PROGRESS.md at session start. Read it if it exists.
-- After each major step, write a brief update to PROGRESS.md:
-  * What was completed, what is next, any decisions or blockers.
-- This ensures coherent resumption if the context window fills up.
-
-THE PROXY GATE (Strict Enforcement):
-- You MUST maintain a plan.md file for the architecture of your task.
-- If you attempt to write code (BashTool, StrReplaceEditTool, etc) BEFORE reading or writing to plan.md, the proxy will REJECT your tool call.
-- You must always EXPLORE, then write to plan.md, then IMPLEMENT.`;
+Quality rules:
+- Be explicit about assumptions, edge cases, and expected behavior.
+- Prefer precise, high-signal outputs over filler.
+- Do not invent file paths, package names, or command results; inspect first.
+- Use PowerShell and Windows paths in this environment.
+- For long tasks, make full use of the available context window without wasting tokens on repetitive boilerplate.
+- If you need mutating proxy tools, establish or update plan.md before attempting code changes so the proxy gate will allow execution.`;
 
 function buildMinimaxAwareSystem(system, targetUrl) {
     const memory = readAugustCoreMemory();
@@ -226,10 +213,9 @@ You can update these sections using august__core_memory_append or august__core_m
 // Inject a brief rule reminder into the message stream every 10 tool-result turns.
 const RULE_REMINDER_MESSAGE = {
     role: 'user',
-    content: '[SYSTEM REMINDER] Continue following the mandatory workflow: ' +
-             'EXPLORE → PLAN → IMPLEMENT → VERIFY → REPORT. ' +
-             'Never fabricate paths or package names — use tools to verify first. ' +
-             'Use PowerShell only, not bash. End with [VERIFIED], [BLOCKED], or [UNVERIFIED].'
+    content: '[SYSTEM REMINDER] Continue the same reasoning chain across tool rounds. ' +
+             'Explore first, keep plan.md current before mutating changes, use PowerShell on Windows, ' +
+             'and verify concrete results instead of guessing.'
 };
 
 function countToolResultTurns(messages) {
@@ -269,6 +255,7 @@ function parseSSEToJSON(sseText) {
             const delta = chunk.choices?.[0]?.delta;
             if (delta) {
                 if (delta.content) fullContent += delta.content;
+                if (delta.reasoning) fullReasoning += delta.reasoning;
                 if (delta.reasoning_content) fullReasoning += delta.reasoning_content;
                 if (delta.tool_calls) {
                     delta.tool_calls.forEach(tc => {
@@ -309,6 +296,83 @@ function parseSSEToJSON(sseText) {
     return result;
 }
 
+// ── Parse native Anthropic SSE stream into a complete Anthropic JSON object ──
+function parseAnthropicSSEToJSON(sseText) {
+    const lines = sseText.split('\n');
+    let id = '';
+    let model = '';
+    let role = 'assistant';
+    let content = [];
+    let stop_reason = null;
+    let stop_sequence = null;
+    let usage = { input_tokens: 0, output_tokens: 0 };
+
+    for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const jsonStr = line.slice(6).trim();
+        if (!jsonStr) continue;
+        try {
+            const evt = JSON.parse(jsonStr);
+            if (evt.type === 'message_start' && evt.message) {
+                id = evt.message.id;
+                model = evt.message.model;
+                role = evt.message.role;
+                if (evt.message.usage) {
+                    usage.input_tokens = evt.message.usage.input_tokens || 0;
+                    usage.output_tokens = evt.message.usage.output_tokens || 0;
+                }
+            } else if (evt.type === 'content_block_start' && evt.content_block) {
+                const block = { type: evt.content_block.type };
+                if (block.type === 'text') block.text = evt.content_block.text || '';
+                if (block.type === 'thinking') block.thinking = evt.content_block.thinking || '';
+                if (block.type === 'tool_use') {
+                    block.id = evt.content_block.id;
+                    block.name = evt.content_block.name;
+                    block.input = evt.content_block.input || {};
+                }
+                content[evt.index] = block;
+            } else if (evt.type === 'content_block_delta' && evt.delta) {
+                const block = content[evt.index];
+                if (block) {
+                    if (evt.delta.type === 'text_delta') block.text = (block.text || '') + (evt.delta.text || '');
+                    if (evt.delta.type === 'thinking_delta') block.thinking = (block.thinking || '') + (evt.delta.thinking || '');
+                    if (evt.delta.type === 'input_json_delta') {
+                        // For simplicity, we store the raw string delta and parse it at the end
+                        block._input_delta = (block._input_delta || '') + (evt.delta.partial_json || '');
+                    }
+                }
+            } else if (evt.type === 'message_delta' && evt.delta) {
+                if (evt.delta.stop_reason) stop_reason = evt.delta.stop_reason;
+                if (evt.delta.stop_sequence) stop_sequence = evt.delta.stop_sequence;
+                if (evt.usage) {
+                    usage.output_tokens = usage.output_tokens || evt.usage.output_tokens || 0;
+                }
+            }
+        } catch (e) { /* ignore parse errors */ }
+    }
+
+    // Post-process content blocks
+    content = content.filter(Boolean).map(block => {
+        if (block._input_delta) {
+            try { block.input = JSON.parse(block._input_delta); }
+            catch (e) { block.input = {}; }
+            delete block._input_delta;
+        }
+        return block;
+    });
+
+    return {
+        id,
+        type: 'message',
+        role,
+        content,
+        model,
+        stop_reason,
+        stop_sequence,
+        usage
+    };
+}
+
 // ── Deterministic bidirectional tool ID mapping (no global state) ──
 // We encode the OpenAI call_id into the Anthropic tool_use_id using base64url,
 // so we can decode it back on the next turn without any shared maps.
@@ -345,6 +409,49 @@ function translateTools(anthropicTools, ctx) {
     });
     ctx.lastKnownTools = translated;
     return translated;
+}
+
+function convertThinkingBlockToReasoningDetail(block, index) {
+    if (!block || block.type !== 'thinking' || !block.thinking) return null;
+    const detail = {
+        type: 'reasoning.text',
+        text: block.thinking
+    };
+    if (block.id !== undefined) detail.id = block.id;
+    if (block.index !== undefined) detail.index = block.index;
+    else detail.index = index;
+    if (block.format !== undefined) detail.format = block.format;
+    if (block.signature !== undefined) detail.signature = block.signature;
+    return detail;
+}
+
+function convertReasoningDetailToThinkingBlock(detail, index) {
+    if (!detail || typeof detail !== 'object') return null;
+    const thinkingText = detail.text || detail.thinking || '';
+    if (!thinkingText) return null;
+    const block = {
+        type: 'thinking',
+        thinking: thinkingText
+    };
+    if (detail.id !== undefined) block.id = detail.id;
+    if (detail.index !== undefined) block.index = detail.index;
+    else block.index = index;
+    if (detail.format !== undefined) block.format = detail.format;
+    if (detail.signature !== undefined) block.signature = detail.signature;
+    return block;
+}
+
+function sanitizeMessagesForOpenAIUpstream(messages, backendModel) {
+    return (messages || []).map(message => {
+        if (!message || typeof message !== 'object') return message;
+        const sanitized = { ...message };
+        if (!isMiniMaxModel(backendModel)) {
+            delete sanitized.reasoning;
+            delete sanitized.reasoning_content;
+            delete sanitized.reasoning_details;
+        }
+        return sanitized;
+    });
 }
 
 async function executeManagedToolCalls(toolCalls, knownTools, requestPayload) {
@@ -422,9 +529,17 @@ async function resolveManagedWebToolCalls(initialData, oReq, cfg) {
         requestPayload.messages.push({
             role: 'assistant',
             content: message?.content || '',
+            reasoning: message?.reasoning,
+            reasoning_content: message?.reasoning_content,
+            reasoning_details: message?.reasoning_details,
             tool_calls: toolCalls
         });
         requestPayload.messages.push(...await executeManagedToolCalls(managedToolCalls, requestPayload.tools, requestPayload));
+
+        const outgoingPayload = {
+            ...requestPayload,
+            messages: sanitizeMessagesForOpenAIUpstream(requestPayload.messages, requestPayload.model)
+        };
 
         const response = await fetch(cfg.targetUrl, {
             method: 'POST',
@@ -432,7 +547,7 @@ async function resolveManagedWebToolCalls(initialData, oReq, cfg) {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${cfg.apiKey}`
             },
-            body: JSON.stringify(requestPayload),
+            body: JSON.stringify(outgoingPayload),
             signal: AbortSignal.timeout(300000)
         });
 
@@ -473,9 +588,17 @@ function translateMessages(anthropicMessages, ctx) {
                 // Assistant message with tool_use blocks -> needs tool_calls array
                 const textParts = [];
                 const toolCalls = [];
-                m.content.forEach(c => {
+                const reasoningParts = [];
+                const reasoningDetails = [];
+
+                m.content.forEach((c, index) => {
                     if (c.type === 'text') {
                         textParts.push(c.text);
+                    } else if (c.type === 'thinking') {
+                        // Extract native Anthropic thinking into OpenAI-style reasoning_content
+                        if (c.thinking) reasoningParts.push(c.thinking);
+                        const detail = convertThinkingBlockToReasoningDetail(c, index);
+                        if (detail) reasoningDetails.push(detail);
                     } else if (c.type === 'tool_use') {
                         const openaiId = getOpenAIId(c.id) || c.id;
                         toolCalls.push({
@@ -488,20 +611,43 @@ function translateMessages(anthropicMessages, ctx) {
                         });
                     }
                 });
+
                 const msg = {
                     role: 'assistant',
                     content: textParts.join('\n') || ''
                 };
+                const reasoning = reasoningParts.join('\n\n');
+                if (reasoning) {
+                    msg.reasoning_content = reasoning;
+                }
+                if (reasoningDetails.length > 0) {
+                    msg.reasoning_details = reasoningDetails;
+                }
                 if (toolCalls.length > 0) {
                     msg.tool_calls = toolCalls;
                 }
                 openaiMessages.push(msg);
             } else {
                 // Regular multi-part content (text blocks, etc.)
-                openaiMessages.push({
+                // Exclude thinking blocks from the text-join to avoid cluttering prompt
+                const reasoningDetails = m.role === 'assistant'
+                    ? m.content
+                        .map((c, index) => convertThinkingBlockToReasoningDetail(c, index))
+                        .filter(Boolean)
+                    : [];
+                const reasoning = reasoningDetails.map(detail => detail.text).join('\n\n');
+                const textOnly = m.content
+                    .filter(c => c.type !== 'thinking')
+                    .map(c => c.text || JSON.stringify(c))
+                    .join('\n');
+                
+                const msg = {
                     role: m.role === 'user' ? 'user' : 'assistant',
-                    content: m.content.map(c => c.text || JSON.stringify(c)).join('\n')
-                });
+                    content: textOnly
+                };
+                if (reasoning) msg.reasoning_content = reasoning;
+                if (reasoningDetails.length > 0) msg.reasoning_details = reasoningDetails;
+                openaiMessages.push(msg);
             }
         } else {
             openaiMessages.push({
@@ -517,6 +663,17 @@ function translateMessages(anthropicMessages, ctx) {
         const last = merged[merged.length - 1];
         if (last && last.role === m.role && m.role !== 'tool') {
             last.content += '\n\n' + m.content;
+            if (m.reasoning_content) {
+                last.reasoning_content = last.reasoning_content
+                    ? `${last.reasoning_content}\n\n${m.reasoning_content}`
+                    : m.reasoning_content;
+            }
+            if (m.reasoning_details?.length) {
+                last.reasoning_details = (last.reasoning_details || []).concat(m.reasoning_details);
+            }
+            if (m.tool_calls?.length) {
+                last.tool_calls = (last.tool_calls || []).concat(m.tool_calls);
+            }
         } else {
             merged.push(m);
         }
@@ -528,9 +685,13 @@ function translateMessages(anthropicMessages, ctx) {
 // ── Build OpenAI request from Anthropic request ──
 async function buildOpenAIRequest(aReq, ctx, cfg) {
     const openaiMessages = [];
+    const backendModel = getClaudeBackendModel(cfg, aReq.model);
 
     // System prompt
-    const systemPrompt = buildOpenAISystemPrompt(aReq.system);
+    const effectiveSystem = isMiniMaxModel(backendModel)
+        ? buildMinimaxAwareSystem(aReq.system, cfg.targetUrl)
+        : aReq.system;
+    const systemPrompt = buildOpenAISystemPrompt(effectiveSystem);
     openaiMessages.push({ role: 'system', content: systemPrompt });
 
     openaiMessages.push(...translateMessages(aReq.messages, ctx));
@@ -553,7 +714,7 @@ async function buildOpenAIRequest(aReq, ctx, cfg) {
     applySelfHealToMessages(openaiMessages);
 
     // ── Smart context compaction (only when approaching model's limit) ──
-    const requestModel = getClaudeBackendModel(cfg, 'unknown');
+    const requestModel = backendModel || getClaudeBackendModel(cfg, 'unknown');
     let contextWindow = loadModelContextWindow('claude', requestModel);
     if (!contextWindow) {
         const modelInfo = await getModelContextWindow(requestModel, cfg.targetUrl, cfg.apiKey);
@@ -605,14 +766,14 @@ async function buildOpenAIRequest(aReq, ctx, cfg) {
         logActivity('COMPACT', `Claude: ${formatTokenCount(estimatedTokens)} -> ${formatTokenCount(estimateTokens(openaiMessages, aReq.tools))} tokens (${formatTokenCount(contextWindow)} window)`);
     }
 
+    const preferredMaxTokens = resolvePreferredMaxTokens(aReq.max_tokens, backendModel);
     const oReq = {
-        model: getClaudeBackendModel(cfg, aReq.model),
-        messages: openaiMessages
+        model: backendModel,
+        messages: sanitizeMessagesForOpenAIUpstream(openaiMessages, backendModel)
     };
 
     // Pass through standard generation parameters without enforcing a proxy-side max_tokens cap.
-    if (aReq.max_tokens !== undefined) oReq.max_tokens = aReq.max_tokens;
-    const backendModel = getClaudeBackendModel(cfg, aReq.model);
+    if (preferredMaxTokens !== undefined) oReq.max_tokens = preferredMaxTokens;
     const preferredTemperature = resolvePreferredTemperature(aReq.temperature, backendModel);
     const preferredTopP = resolvePreferredTopP(aReq.top_p, backendModel);
     const isOpenAIPath = !shouldUseAnthropicUpstream(cfg.targetUrl);
@@ -620,6 +781,7 @@ async function buildOpenAIRequest(aReq, ctx, cfg) {
     if (preferredTemperature !== undefined) oReq.temperature = preferredTemperature;
     if (preferredTopP !== undefined) oReq.top_p = preferredTopP;
     if (preferredTopK !== undefined) oReq.top_k = preferredTopK;
+    if (isMiniMaxModel(backendModel)) oReq.reasoning_split = true;
     if (aReq.stop_sequences) oReq.stop = aReq.stop_sequences;
 
     console.log(`[Proxy Params]: max_tokens=${oReq.max_tokens}, msg_count=${openaiMessages.length}, temp=${oReq.temperature}, top_p=${oReq.top_p}, top_k=${oReq.top_k}`);
@@ -691,12 +853,13 @@ function buildAnthropicUpstreamRequest(aReq, cfg, upstreamModelOverride) {
         console.log(`[Proxy Reminder]: Injected mid-session rule reminder at message index ${lastIdx}`);
     }
 
-    if (aReq.max_tokens !== undefined) upstreamReq.max_tokens = aReq.max_tokens;
     const backendModel = upstreamModelOverride || getClaudeBackendModel(cfg, aReq.model);
+    const preferredMaxTokens = resolvePreferredMaxTokens(aReq.max_tokens, backendModel);
     const preferredTemperature = resolvePreferredTemperature(aReq.temperature, backendModel);
     const preferredTopP = resolvePreferredTopP(aReq.top_p, backendModel);
     // isAnthropicPath=true here since buildAnthropicUpstreamRequest always targets Anthropic endpoint
     const preferredTopK = resolvePreferredTopK(aReq.top_k, backendModel, true);
+    if (preferredMaxTokens !== undefined) upstreamReq.max_tokens = preferredMaxTokens;
     if (preferredTemperature !== undefined) upstreamReq.temperature = preferredTemperature;
     if (preferredTopP !== undefined) upstreamReq.top_p = preferredTopP;
     if (preferredTopK !== undefined) upstreamReq.top_k = preferredTopK;
@@ -971,6 +1134,9 @@ function translateOpenAIResponse(openaiData, requestModel, ctx) {
     let toolCalls = choice.message?.tool_calls || [];
     let messageContent = choice.message?.content || '';
     const reasoningContent = choice.message?.reasoning || choice.message?.reasoning_content || '';
+    const reasoningDetails = Array.isArray(choice.message?.reasoning_details)
+        ? choice.message.reasoning_details
+        : [];
 
     // Auto-repair: extract tool_use blocks embedded in content string
     const repaired = extractEmbeddedToolCalls(messageContent);
@@ -978,7 +1144,12 @@ function translateOpenAIResponse(openaiData, requestModel, ctx) {
     toolCalls = toolCalls.concat(repaired.toolCalls);
 
     const content = [];
-    if (reasoningContent) {
+    if (reasoningDetails.length > 0) {
+        reasoningDetails.forEach((detail, index) => {
+            const block = convertReasoningDetailToThinkingBlock(detail, index);
+            if (block) content.push(block);
+        });
+    } else if (reasoningContent) {
         // Preserve as a proper Anthropic thinking block — NOT a plain text block.
         // This is critical: if we degrade it to text, the model loses its reasoning
         // chain on the next turn (can't reference prior thinking as thinking).
@@ -1167,22 +1338,14 @@ async function handleMessages(req, res, cleanPath, reqId) {
                 }
 
                 if (contentType.includes('text/event-stream')) {
-                    // SSE stream: accumulate usage from message_start / message_delta events
-                    let inputTokens = 0;
-                    let outputTokens = 0;
-                    for (const line of rawBody.split('\n')) {
-                        if (!line.startsWith('data: ')) continue;
-                        try {
-                            const evt = JSON.parse(line.slice(6).trim());
-                            if (evt.type === 'message_start' && evt.message?.usage) {
-                                inputTokens = evt.message.usage.input_tokens || 0;
-                            }
-                            if (evt.type === 'message_delta' && evt.usage) {
-                                outputTokens = evt.usage.output_tokens || 0;
-                            }
-                        } catch (e) { /* ignore */ }
+                    // SSE stream: reconstruct full response to capture it for debug UI
+                    try {
+                        const parsed = parseAnthropicSSEToJSON(rawBody);
+                        captureResponse(reqId, parsed);
+                        captureTokens(reqId, parsed.usage?.input_tokens || 0, parsed.usage?.output_tokens || 0);
+                    } catch (e) {
+                        console.warn('[Proxy SSE Parse Warning]: Failed to reconstruct Anthropic response for capture:', e.message);
                     }
-                    captureTokens(reqId, inputTokens, outputTokens);
                 } else if (contentType.includes('application/json')) {
                     try {
                         let parsed = JSON.parse(clientBody);
