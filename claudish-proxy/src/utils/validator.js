@@ -28,7 +28,12 @@ function validateToolArguments(toolCall, toolDefinitions, messages = []) {
 
     // ── The Proxy Execution Gate (Plan check) ──
     // Block code generation / file writes if a plan hasn't been formally established
-    const mutatingTools = ['StrReplaceEditTool', 'mcp__filesystem__write_file', 'BashTool'];
+    const mutatingTools = [
+        'StrReplaceEditTool', 'BashTool',
+        'mcp__filesystem__write_file', 'mcp__filesystem__create_directory', 
+        'mcp__filesystem__move_file', 'mcp__filesystem__edit_file',
+        'mcp__bash__execute_command', 'mcp__google_drive__write_file'
+    ];
     if (mutatingTools.includes(toolName)) {
         // Check if plan.md exists anywhere in the conversation history
         const hasPlanned = messages.some(m => {

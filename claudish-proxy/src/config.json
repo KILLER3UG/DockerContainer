@@ -38,5 +38,6 @@
     "apiKey": "${env:MINIMAX_API_KEY}"
   },
   "requestLogLimit": 1000000000,
-  "pendingRequestTimeoutMinutes": 1000
+  "pendingRequestTimeoutMinutes": 1000,
+  "august_secret_key": "${env:GATEWAY_API_KEY}"
 }

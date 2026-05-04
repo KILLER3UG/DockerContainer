@@ -16,7 +16,8 @@ module.exports = {
             name: 'filesystem',
             // Node-based filesystem server
             command: 'npx',
-            args: ['-y', '@modelcontextprotocol/server-filesystem', 'C:/Users/rober/LocalFolders']
+            // Note: In Docker, you must mount the host folder to /app/host_files in docker-compose.yml
+            args: ['-y', '@modelcontextprotocol/server-filesystem', '/app/host_files']
         },
         {
             name: 'fetch',
