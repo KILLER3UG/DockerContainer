@@ -1,11 +1,23 @@
-const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
-const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
+let Client = null;
+let StdioClientTransport = null;
+let mcpSdkLoadError = null;
+
+try {
+    ({ Client } = require('@modelcontextprotocol/sdk/client/index.js'));
+    ({ StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js'));
+} catch (error) {
+    mcpSdkLoadError = error;
+    console.warn(`[MCP] SDK unavailable; MCP servers disabled: ${error.message}`);
+}
 const { mcpServers } = require('./mcp-config.js');
 
 const clients = new Map();
 const toolRegistry = new Map(); // "mcp__serverName__toolName" -> tool schema
 
 async function startServer(config) {
+    if (!Client || !StdioClientTransport) {
+        return;
+    }
     console.log(`[MCP] Starting server '${config.name}'...`);
     
     // Pass existing env vars plus any server-specific ones
@@ -58,6 +70,9 @@ async function startServer(config) {
 }
 
 async function startMcpServers(minimaxApiKey) {
+    if (!Client || !StdioClientTransport) {
+        return;
+    }
     if (minimaxApiKey && !process.env.MINIMAX_API_KEY) {
         process.env.MINIMAX_API_KEY = minimaxApiKey;
     }
@@ -76,6 +91,9 @@ function isMcpToolName(name) {
 }
 
 async function executeMcpToolCall(toolName, args) {
+    if (!Client || !StdioClientTransport) {
+        throw new Error(`[MCP Disabled] ${mcpSdkLoadError?.message || 'MCP SDK not installed.'}`);
+    }
     if (!isMcpToolName(toolName)) {
         throw new Error(`Not an MCP tool: ${toolName}`);
     }
@@ -98,12 +116,17 @@ async function executeMcpToolCall(toolName, args) {
             arguments: args
         });
 
-        // Format result back to string
+        // Format result back to string — guard against non-text blocks and missing content
+        const content = result?.content || [];
+        const text = content
+            .map(c => c.text ?? (c.type ? `[${c.type} block]` : JSON.stringify(c)))
+            .filter(Boolean)
+            .join('\n') || '(empty response)';
+
         if (result.isError) {
-            return `[MCP Error] ${result.content.map(c => c.text).join('\n')}`;
+            return `[MCP Error] ${text}`;
         }
-        
-        return result.content.map(c => c.text).join('\n');
+        return text;
     } catch (e) {
         throw new Error(`[MCP Execution Error] ${e.message}`);
     }

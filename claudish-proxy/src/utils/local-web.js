@@ -26,7 +26,7 @@ function isBlockedHost(hostname) {
   }
 }
 
-function httpsGet(url, timeout = 15000) {
+function httpsGet(url, timeout = 15000, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const urlObj = new URL(url);
     const isBlocked = isBlockedHost(urlObj.hostname);
@@ -34,7 +34,14 @@ function httpsGet(url, timeout = 15000) {
       return reject(new Error('Fetching internal/private addresses is not allowed.'));
     }
     const protocol = urlObj.protocol === 'https:' ? https : http;
-    const req = protocol.get(url, { timeout }, res => {
+    const options = {
+      timeout,
+      headers: {
+        'User-Agent': 'ClaudishProxy/1.0',
+        ...extraHeaders
+      }
+    };
+    const req = protocol.get(url, options, res => {
       let data = '';
       res.on('data', chunk => { data += chunk; });
       res.on('end', () => resolve({ status: res.statusCode, body: data, headers: res.headers }));
@@ -66,25 +73,57 @@ function extractTitle(html) {
 
 // ── web_search ──
 async function webSearch(query, maxResults = 5) {
-  const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_redirect=1`;
-  const res = await httpsGet(url);
+  // html.duckduckgo.com/html/ is the static page that returns real web results.
+  // api.duckduckgo.com only returns Instant Answers (topic summaries) which are
+  // almost always empty for general queries.
+  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  const res = await httpsGet(url, 15000, {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Accept-Language': 'en-US,en;q=0.9'
+  });
+
   if (res.status !== 200) throw new Error(`DuckDuckGo returned status ${res.status}`);
 
-  let data;
-  try { data = JSON.parse(res.body); } catch { throw new Error('Failed to parse DuckDuckGo response'); }
-
   const results = [];
-  if (data.RelatedTopics) {
-    for (const topic of data.RelatedTopics) {
-      if (results.length >= maxResults) break;
-      if (topic.Text && topic.FirstURL) {
-        results.push({
-          title: topic.Text.replace(/<[^>]+>/g, ''),
-          url: topic.FirstURL,
-          snippet: topic.Text.replace(/<[^>]+>/g, '').substring(0, 200)
-        });
-      }
+  const html = res.body;
+
+  // Each result lives inside <div class="result ...">...</div>
+  // We match lazily up to the closing </div></div> pair.
+  const resultBlockRe = /<div class="result(?:\s[^"]*)?"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi;
+  let blockMatch;
+
+  while ((blockMatch = resultBlockRe.exec(html)) !== null && results.length < maxResults) {
+    const block = blockMatch[1];
+
+    // Title link: <a class="result__a" href="/l/?uddg=...&...">Title text</a>
+    const linkRe   = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i;
+    // Snippet:    <a class="result__snippet">snippet text</a>
+    const snipRe   = /<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i;
+
+    const linkMatch = linkRe.exec(block);
+    const snipMatch = snipRe.exec(block);
+    if (!linkMatch) continue;
+
+    // DuckDuckGo wraps the real URL in a redirect — extract via uddg param
+    let href = linkMatch[1];
+    try {
+      const uddg = new URL('https://html.duckduckgo.com' + href).searchParams.get('uddg');
+      if (uddg) href = decodeURIComponent(uddg);
+    } catch { /* keep href as-is if URL parsing fails */ }
+
+    const title   = stripHtml(linkMatch[2]).trim();
+    const snippet = snipMatch ? stripHtml(snipMatch[1]).trim().substring(0, 250) : '';
+
+    if (title && href) {
+      results.push({ title, url: href, snippet });
     }
+  }
+
+  if (results.length === 0) {
+    return {
+      results: [], query, count: 0,
+      note: 'No results found — DuckDuckGo may have blocked the request or returned no hits for this query.'
+    };
   }
 
   return { results, query, count: results.length };
@@ -102,11 +141,30 @@ async function webFetch(url) {
   return { title, url, content: textContent, status: res.status };
 }
 
+function normalizeManagedWebArgs(toolName, args = {}) {
+  const normalized = { ...(args || {}) };
+
+  if (toolName === 'web_fetch') {
+    if ((normalized.url === undefined || normalized.url === null || normalized.url === '') && typeof normalized.prompt === 'string') {
+      normalized.url = normalized.prompt.trim();
+    }
+  }
+
+  if (toolName === 'web_search') {
+    if ((normalized.query === undefined || normalized.query === null || normalized.query === '') && typeof normalized.prompt === 'string') {
+      normalized.query = normalized.prompt.trim();
+    }
+  }
+
+  return normalized;
+}
+
 // ── Main export ──
 async function executeManagedWebTool(toolName, args) {
+  const normalizedArgs = normalizeManagedWebArgs(toolName, args);
   switch (toolName) {
-    case 'web_search': return webSearch(args.query || '', args.max_results || 5);
-    case 'web_fetch':  return webFetch(args.url || '');
+    case 'web_search': return webSearch(normalizedArgs.query || '', normalizedArgs.max_results || 5);
+    case 'web_fetch':  return webFetch(normalizedArgs.url || '');
     default: throw new Error(`Unknown web tool: ${toolName}`);
   }
 }

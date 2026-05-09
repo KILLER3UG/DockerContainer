@@ -1,0 +1,11 @@
+{
+  "model": "claude-opus-4-6",
+  "max_tokens": 900,
+  "stream": false,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Use WebSearch to find Gemini Android app deep link open with prefilled prompt URI scheme 2025 2026 and summarize the result."
+    }
+  ]
+}

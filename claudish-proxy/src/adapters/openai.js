@@ -28,6 +28,7 @@ function parseSSEToJSON(sseText) {
             const delta = chunk.choices?.[0]?.delta;
             if (delta) {
                 if (delta.content) fullContent += delta.content;
+                if (delta.reasoning) fullReasoning += delta.reasoning;
                 if (delta.reasoning_content) fullReasoning += delta.reasoning_content;
                 if (delta.tool_calls) {
                     delta.tool_calls.forEach(tc => {
@@ -219,14 +220,41 @@ async function handleChatCompletions(req, res, cleanPath, reqId) {
                 oReq.messages = [{ role: 'user', content: 'hi' }];
             }
 
-            // Inject Windows environment system prompt
+            // Inject Windows environment system prompt and August Brain Context
+            const { readAugustCoreMemory, renderAugustCoreMemory } = require('../utils/august-tools');
+            const memory = readAugustCoreMemory();
+            const renderedMemory = renderAugustCoreMemory(memory);
+            
+            const augustBrainSystem = `[AUGUST GLOBAL BRAIN - ALWAYS ACTIVE]
+<user_profile>
+${renderedMemory.user_profile}
+</user_profile>
+<global_context>
+${renderedMemory.global_context}
+</global_context>
+<active_projects>
+${renderedMemory.active_projects}
+</active_projects>
+<integrations>
+${renderedMemory.integrations}
+</integrations>
+<recent_events>
+${renderedMemory.recent_events}
+</recent_events>
+<conversation_checkpoints>
+${renderedMemory.conversation_checkpoints}
+</conversation_checkpoints>
+You can update these sections using august__core_memory_append or august__core_memory_replace.`;
+
             const windowsSystemPrompt = 'ENVIRONMENT: You are running on Windows (PowerShell). Use Windows commands and paths.\n' +
                 '- Use PowerShell syntax (e.g., Get-ChildItem, Select-String, Test-Path) NOT bash (ls, grep, cat).\n' +
                 '- Use backslash paths (C:\\Users\\...) NOT forward slash (/home/...).\n' +
                 '- Use Invoke-WebRequest or curl.exe for HTTP requests.\n' +
                 '- File separators are backslashes. Directory separator is backslash.\n' +
                 '- Do NOT suggest bash, sh, zsh, or WSL commands unless explicitly asked.\n' +
-                '- If you need to run shell commands, use PowerShell syntax.';
+                '- If you need to run shell commands, use PowerShell syntax.\n\n' +
+                augustBrainSystem;
+            
             const existingSystemIdx = oReq.messages.findIndex(m => m.role === 'system');
             if (existingSystemIdx >= 0) {
                 const existing = oReq.messages[existingSystemIdx].content || '';
@@ -585,6 +613,8 @@ async function handleChatCompletions(req, res, cleanPath, reqId) {
                         role: upstreamMsg?.role,
                         content: upstreamMsg?.content || ''
                     };
+                    if (upstreamMsg?.reasoning) delta.reasoning = upstreamMsg.reasoning;
+                    if (upstreamMsg?.reasoning_content) delta.reasoning_content = upstreamMsg.reasoning_content;
                     // Include tool_calls in the synthesized SSE so the client knows what tools to execute
                     if (upstreamMsg?.tool_calls && upstreamMsg.tool_calls.length > 0) {
                         delta.tool_calls = upstreamMsg.tool_calls.map((tc, idx) => ({
@@ -632,6 +662,11 @@ async function handleChatCompletions(req, res, cleanPath, reqId) {
                     captureResponse(reqId, parsed);
                     const { inputTokens: inTok, outputTokens: outTok } = extractUsageTokens(parsed.usage, 'SSE->JSON aggregation');
                     captureTokens(reqId, inTok, outTok);
+
+                    // --- AUTO-MEMORY BACKGROUND EXTRACTION ---
+                    const { extractAndSaveMemories } = require('../utils/auto-memory');
+                    extractAndSaveMemories(oReq.messages, parsed, cfg, upstreamModel).catch(() => {});
+
                     res.writeHead(200, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify(parsed));
                 } catch (e) {
@@ -656,6 +691,10 @@ async function handleChatCompletions(req, res, cleanPath, reqId) {
                     captureResponse(reqId, parsed);
                     const { inputTokens: inTok, outputTokens: outTok } = extractUsageTokens(parsed.usage, 'JSON passthrough');
                     captureTokens(reqId, inTok, outTok);
+
+                    // --- AUTO-MEMORY BACKGROUND EXTRACTION ---
+                    const { extractAndSaveMemories } = require('../utils/auto-memory');
+                    extractAndSaveMemories(oReq.messages, parsed, cfg, upstreamModel).catch(() => {});
                 } catch (e) { /* ignore parse errors for passthrough */ }
                 res.writeHead(response.status, { 'Content-Type': 'application/json' });
                 res.end(rawBody);

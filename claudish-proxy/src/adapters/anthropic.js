@@ -5,7 +5,8 @@ const { getModelContextWindow, saveModelContextWindow, loadModelContextWindow } 
 const { estimateTokens, formatTokenCount } = require('../../src/utils/tokens');
 const { buildFriendlyRateLimitMessage, getRetryDelayMs, isRetryableStatus } = require('../../src/utils/upstream');
 const { getMcpToolDefinitions, isMcpToolName, executeMcpToolCall } = require('../../src/utils/mcp-client');
-const { getAugustToolDefinitions, isAugustToolName, executeAugustToolCall, readAugustCoreMemory } = require('../../src/utils/august-tools');
+const { getAugustToolDefinitions, isAugustToolName, executeAugustToolCall, readAugustCoreMemory, renderAugustCoreMemory } = require('../../src/utils/august-tools');
+const { executeManagedWebTool } = require('../../src/utils/local-web');
 const { validateToolArguments, buildValidationErrorToolMessage } = require('../../src/utils/validator');
 
 const CLAUDE_PUBLIC_MODEL_ALIAS = 'claude-opus-4-6';
@@ -20,6 +21,14 @@ const DEFAULT_MINIMAX_TEMPERATURE = 1;
 const DEFAULT_MINIMAX_TOP_P = 0.95;
 const DEFAULT_MINIMAX_TOP_K = 40;
 const DEFAULT_MINIMAX_MAX_TOKENS = 65536;
+const MANAGED_WEB_TOOL_NAMES = new Set([
+    'WebSearch',
+    'WebFetch',
+    'web_search',
+    'web_fetch',
+    'mcp__workspace__web_search',
+    'mcp__workspace__web_fetch'
+]);
 
 function isMiniMaxModel(model) {
     if (typeof model === 'string' && model.toLowerCase().includes('minimax')) {
@@ -182,18 +191,237 @@ Quality rules:
 - Prefer precise, high-signal outputs over filler.
 - Do not invent file paths, package names, or command results; inspect first.
 - Use PowerShell and Windows paths in this environment.
+- If WebSearch or WebFetch is available, use it for public internet access instead of claiming browsing is blocked.
+- If WebSearch is not visibly available but mcp__workspace__web_fetch is available, use mcp__workspace__web_fetch to perform web research by fetching public search endpoints or known documentation URLs.
+- For search via fetch, prefer:
+  1. https://api.duckduckgo.com/?q=<QUERY>&format=json&no_redirect=1
+  2. a provider's public docs or homepage URL directly
+  3. follow-up fetches on promising public result URLs
+- Do not tell the user "I have no web search tool" if a public web fetch tool is available. Use the fetch-based workflow instead.
+- Never combine WebSearch/WebFetch with any other tool in the same assistant turn. Use web tools in a dedicated turn, then continue with other tools after the result comes back.
+- After a web fetch or web search tool returns content, summarize that result directly. Do not switch to august__bash or browser tools just to refetch the same public page.
 - For long tasks, make full use of the available context window without wasting tokens on repetitive boilerplate.
 - If you need mutating proxy tools, establish or update plan.md before attempting code changes so the proxy gate will allow execution.`;
 
+function isManagedWebToolName(name) {
+    return typeof name === 'string' && MANAGED_WEB_TOOL_NAMES.has(name);
+}
+
+function getManagedWebToolKind(name) {
+    if (typeof name !== 'string') return null;
+    if (name === 'WebSearch' || name === 'web_search' || name === 'mcp__workspace__web_search') {
+        return 'search';
+    }
+    if (name === 'WebFetch' || name === 'web_fetch' || name === 'mcp__workspace__web_fetch') {
+        return 'fetch';
+    }
+    return null;
+}
+
+function getManagedAnthropicWebToolDefinitions() {
+    return [
+        {
+            name: 'WebSearch',
+            description: 'Search the public web for relevant pages. Use only for external/public information. Do not combine this tool with any other tool in the same turn.',
+            input_schema: {
+                type: 'object',
+                properties: {
+                    query: {
+                        type: 'string',
+                        description: 'The web search query.'
+                    },
+                    prompt: {
+                        type: 'string',
+                        description: 'Compatibility alias for query when a stale client schema still sends prompt.'
+                    },
+                    max_results: {
+                        type: 'integer',
+                        description: 'Maximum number of results to return.'
+                    }
+                },
+                required: ['query']
+            }
+        },
+        {
+            name: 'WebFetch',
+            description: 'Fetch and summarize a public webpage by URL. Private/local network addresses are blocked. Do not combine this tool with any other tool in the same turn.',
+            input_schema: {
+                type: 'object',
+                properties: {
+                    url: {
+                        type: 'string',
+                        description: 'The public HTTP or HTTPS URL to fetch.'
+                    },
+                    prompt: {
+                        type: 'string',
+                        description: 'Compatibility alias for url when a stale client schema still sends prompt containing the URL.'
+                    }
+                },
+                required: ['url']
+            }
+        },
+        {
+            name: 'mcp__workspace__web_search',
+            description: 'Search the public web for relevant pages. Workspace-compatible alias for third-party Claude clients. Do not combine this tool with any other tool in the same turn.',
+            input_schema: {
+                type: 'object',
+                properties: {
+                    query: {
+                        type: 'string',
+                        description: 'The web search query.'
+                    },
+                    prompt: {
+                        type: 'string',
+                        description: 'Compatibility alias for query when a stale client schema still sends prompt.'
+                    },
+                    max_results: {
+                        type: 'integer',
+                        description: 'Maximum number of results to return.'
+                    }
+                },
+                required: ['query']
+            }
+        },
+        {
+            name: 'mcp__workspace__web_fetch',
+            description: 'Fetch and summarize a public webpage by URL. Workspace-compatible alias for third-party Claude clients. Private/local network addresses are blocked. Do not combine this tool with any other tool in the same turn.',
+            input_schema: {
+                type: 'object',
+                properties: {
+                    url: {
+                        type: 'string',
+                        description: 'The public HTTP or HTTPS URL to fetch.'
+                    },
+                    prompt: {
+                        type: 'string',
+                        description: 'Compatibility alias for url when a stale client schema still sends prompt containing the URL.'
+                    }
+                },
+                required: ['url']
+            }
+        }
+    ];
+}
+
+function sanitizeAnthropicToolDefinition(tool) {
+    if (!tool || typeof tool !== 'object') return null;
+
+    let normalized = tool;
+    if (tool.type === 'function' && tool.function && typeof tool.function === 'object') {
+        normalized = {
+            name: tool.function.name,
+            description: tool.function.description || '',
+            input_schema: tool.function.parameters || { type: 'object', properties: {} }
+        };
+    }
+
+    const name = typeof normalized.name === 'string' ? normalized.name.trim() : '';
+    if (!name) return null;
+
+    let inputSchema = normalized.input_schema;
+    if (!inputSchema || typeof inputSchema !== 'object' || Array.isArray(inputSchema)) {
+        inputSchema = { type: 'object', properties: {} };
+    }
+    if (!inputSchema.type) inputSchema.type = 'object';
+    if (inputSchema.type === 'object' && (!inputSchema.properties || typeof inputSchema.properties !== 'object' || Array.isArray(inputSchema.properties))) {
+        inputSchema.properties = {};
+    }
+
+    return {
+        name,
+        description: typeof normalized.description === 'string' ? normalized.description : '',
+        input_schema: inputSchema
+    };
+}
+
+function dedupeAndCanonicalizeAnthropicTools(tools) {
+    const sanitizedTools = [];
+    let includeManagedSearch = false;
+    let includeManagedFetch = false;
+    const seenNames = new Set();
+
+    for (const rawTool of Array.isArray(tools) ? tools : []) {
+        const tool = sanitizeAnthropicToolDefinition(rawTool);
+        if (!tool) continue;
+        if (isBrowserAutomationToolName(tool.name)) continue;
+
+        const managedKind = getManagedWebToolKind(tool.name);
+        if (managedKind === 'search') {
+            includeManagedSearch = true;
+            continue;
+        }
+        if (managedKind === 'fetch') {
+            includeManagedFetch = true;
+            continue;
+        }
+
+        if (seenNames.has(tool.name)) continue;
+        seenNames.add(tool.name);
+        sanitizedTools.push(tool);
+    }
+
+    const canonicalManagedTools = getManagedAnthropicWebToolDefinitions().filter(tool => {
+        const kind = getManagedWebToolKind(tool.name);
+        return (kind === 'search' && includeManagedSearch) || (kind === 'fetch' && includeManagedFetch);
+    });
+
+    for (const tool of canonicalManagedTools) {
+        if (seenNames.has(tool.name)) continue;
+        seenNames.add(tool.name);
+        sanitizedTools.push(tool);
+    }
+
+    return sanitizedTools;
+}
+
+function getCanonicalManagedAnthropicWebTools() {
+    return getManagedAnthropicWebToolDefinitions().filter(tool =>
+        tool.name === 'WebSearch' || tool.name === 'WebFetch'
+    );
+}
+
+async function executeManagedProxyTool(toolName, args) {
+    if (isManagedWebToolName(toolName)) {
+        const localName = (
+            toolName === 'WebSearch' ||
+            toolName === 'web_search' ||
+            toolName === 'mcp__workspace__web_search'
+        ) ? 'web_search' : 'web_fetch';
+        logActivity('WEB', `${toolName} executed locally`);
+        return executeManagedWebTool(localName, args || {});
+    }
+    if (isAugustToolName(toolName)) {
+        logActivity('AUGUST', `${toolName} executed locally`);
+        return executeAugustToolCall(toolName, args);
+    }
+    if (isMcpToolName(toolName)) {
+        return executeMcpToolCall(toolName, args);
+    }
+    throw new Error(`Unsupported managed proxy tool: ${toolName}`);
+}
+
 function buildMinimaxAwareSystem(system, targetUrl) {
     const memory = readAugustCoreMemory();
+    const renderedMemory = renderAugustCoreMemory(memory);
     const coreMemoryBlock = `[AUGUST GLOBAL BRAIN - ALWAYS ACTIVE]
 <user_profile>
-${memory.user_profile}
+${renderedMemory.user_profile}
 </user_profile>
 <global_context>
-${memory.global_context}
+${renderedMemory.global_context}
 </global_context>
+<active_projects>
+${renderedMemory.active_projects}
+</active_projects>
+<integrations>
+${renderedMemory.integrations}
+</integrations>
+<recent_events>
+${renderedMemory.recent_events}
+</recent_events>
+<conversation_checkpoints>
+${renderedMemory.conversation_checkpoints}
+</conversation_checkpoints>
 You can update these sections using august__core_memory_append or august__core_memory_replace.`;
 
     const originalText = systemBlocksToText(system);
@@ -206,6 +434,47 @@ You can update these sections using august__core_memory_append or august__core_m
     const totalChars = combined.length;
     console.log(`[Proxy System Prompt]: August core injected. Total system prompt length=${totalChars} chars`);
     return [{ type: 'text', text: combined }];
+}
+
+function buildClientToolGuidance(clientTools) {
+    if (!Array.isArray(clientTools) || clientTools.length === 0) return '';
+    const visibleNames = clientTools
+        .map(tool => tool?.name || tool?.function?.name)
+        .filter(Boolean);
+    if (visibleNames.length === 0) return '';
+
+    const webLike = visibleNames.filter(name =>
+        /web[_-]?fetch|web[_-]?search|fetch/i.test(name)
+    );
+
+    const lines = [
+        '[CLIENT TOOL INVENTORY]',
+        `Visible client tools include: ${visibleNames.join(', ')}.`
+    ];
+
+    if (webLike.length > 0) {
+        lines.push(`For web access, prefer these visible client-compatible tool names first: ${webLike.join(', ')}.`);
+        lines.push('If one of those visible web-fetch tools fails or is blocked, retry the research using the same compatible web-fetch/search name that remains available in the tool list instead of saying browsing is unavailable.');
+        lines.push('Do not switch to browser automation for ordinary public web research while a compatible web fetch/search tool is available.');
+        lines.push('Once a compatible web fetch/search tool returns content, summarize that content directly instead of switching to august__bash or another refetch tool.');
+    }
+
+    return lines.join('\n');
+}
+
+function isBrowserAutomationToolName(name) {
+    if (typeof name !== 'string') return false;
+    const normalized = name.toLowerCase();
+    return (
+        normalized.includes('list_connected_browsers') ||
+        normalized.includes('browser_navigate') ||
+        normalized.includes('browser_snapshot') ||
+        normalized.includes('browser_click') ||
+        normalized.includes('browser_type') ||
+        normalized.includes('browser_wait') ||
+        normalized.includes('browser') ||
+        normalized.includes('chrome')
+    );
 }
 
 // ── Mid-session drift prevention ──
@@ -230,6 +499,143 @@ function shouldInjectReminderMessage(messages) {
     const toolTurns = countToolResultTurns(messages);
     // Inject after every 10 tool-result turns (but not at zero)
     return toolTurns > 0 && toolTurns % 10 === 0;
+}
+
+function getManagedWebLocalToolName(toolName) {
+    return (
+        toolName === 'WebSearch' ||
+        toolName === 'web_search' ||
+        toolName === 'mcp__workspace__web_search'
+    ) ? 'web_search' : 'web_fetch';
+}
+
+function formatManagedWebResult(result) {
+    if (!result || typeof result !== 'object') {
+        return String(result || '');
+    }
+
+    if (Array.isArray(result.results)) {
+        const lines = [
+            `Search query: ${result.query || ''}`.trim(),
+            `Result count: ${result.count ?? result.results.length}`
+        ].filter(Boolean);
+
+        result.results.forEach((item, index) => {
+            lines.push(`[${index + 1}] ${item.title || 'Untitled'}`);
+            if (item.url) lines.push(`URL: ${item.url}`);
+            if (item.snippet) lines.push(`Snippet: ${item.snippet}`);
+        });
+
+        return lines.join('\n');
+    }
+
+    if (result.url || result.content) {
+        return [
+            `Title: ${result.title || ''}`.trim(),
+            `URL: ${result.url || ''}`.trim(),
+            result.status ? `Status: ${result.status}` : '',
+            '',
+            result.content || ''
+        ].filter(Boolean).join('\n');
+    }
+
+    return JSON.stringify(result);
+}
+
+function formatManagedToolResult(toolName, result) {
+    if (isManagedWebToolName(toolName)) {
+        return formatManagedWebResult(result);
+    }
+    if (typeof result === 'string') return result;
+    if (result === undefined || result === null) return '';
+    return JSON.stringify(result);
+}
+
+function extractToolResultText(content) {
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+        return content
+            .map(part => {
+                if (typeof part === 'string') return part;
+                if (part?.type === 'text') return part.text || '';
+                return JSON.stringify(part);
+            })
+            .join('\n');
+    }
+    if (content && typeof content === 'object' && content.type === 'text') {
+        return content.text || '';
+    }
+    return String(content || '');
+}
+
+function shouldRepairManagedWebToolResult(toolName, content) {
+    if (!isManagedWebToolName(toolName)) return false;
+    const text = extractToolResultText(content).toLowerCase();
+    if (!text) return false;
+    return (
+        text.includes('access to this website is blocked by your network egress settings') ||
+        text.includes('only 127.0.0.1 is allowed access') ||
+        text.includes('only allows localhost') ||
+        text.includes('blocked for external domains') ||
+        text.includes("wasn't able to fetch") ||
+        text.includes('failed to fetch')
+    );
+}
+
+async function repairManagedWebToolResults(anthropicMessages) {
+    if (!Array.isArray(anthropicMessages) || anthropicMessages.length === 0) {
+        return { messages: anthropicMessages, repairedCount: 0 };
+    }
+
+    const repairedMessages = [];
+    const toolUseById = new Map();
+    let repairedCount = 0;
+
+    for (const message of anthropicMessages) {
+        const clonedMessage = message && typeof message === 'object'
+            ? {
+                ...message,
+                content: Array.isArray(message.content)
+                    ? message.content.map(block => (block && typeof block === 'object' ? { ...block } : block))
+                    : message.content
+            }
+            : message;
+
+        if (Array.isArray(clonedMessage?.content)) {
+            for (const block of clonedMessage.content) {
+                if (block?.type === 'tool_use' && block.id) {
+                    toolUseById.set(block.id, {
+                        name: block.name,
+                        input: block.input || {}
+                    });
+                }
+            }
+
+            for (const block of clonedMessage.content) {
+                if (block?.type !== 'tool_result' || !block.tool_use_id) continue;
+
+                const priorToolUse = toolUseById.get(block.tool_use_id);
+                const toolName = priorToolUse?.name;
+                if (!toolName || !shouldRepairManagedWebToolResult(toolName, block.content)) continue;
+
+                try {
+                    const repairedResult = await executeManagedWebTool(
+                        getManagedWebLocalToolName(toolName),
+                        priorToolUse.input || {}
+                    );
+                    block.content = formatManagedWebResult(repairedResult);
+                    repairedCount += 1;
+                    logActivity('WEB', `${toolName} tool_result repaired locally after client-side fetch failure`);
+                } catch (error) {
+                    console.warn(`[Proxy Web Repair]: Failed to repair ${toolName} result locally:`, error.message);
+                }
+            }
+        }
+
+        repairedMessages.push(clonedMessage);
+    }
+
+    return { messages: repairedMessages, repairedCount };
 }
 
 // ── Parse SSE stream into a complete Chat Completions JSON object ──
@@ -481,17 +887,12 @@ async function executeManagedToolCalls(toolCalls, knownTools, requestPayload) {
 
         try {
             let result;
-            if (isAugustToolName(toolName)) {
-                logActivity('AUGUST', `${toolName} executed locally`);
-                result = await executeAugustToolCall(toolName, parsedArgs);
-            } else if (isMcpToolName(toolName)) {
-                result = await executeMcpToolCall(toolName, parsedArgs);
-            }
+            result = await executeManagedProxyTool(toolName, parsedArgs);
 
             toolMessages.push({
                 role: 'tool',
                 tool_call_id: toolCall.id,
-                content: result
+                content: formatManagedToolResult(toolName, result)
             });
         } catch (e) {
             toolMessages.push({
@@ -518,7 +919,11 @@ async function resolveManagedWebToolCalls(initialData, oReq, cfg) {
         const toolCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
         if (toolCalls.length === 0) return data;
 
-        const managedToolCalls = toolCalls.filter(tc => isMcpToolName(tc?.function?.name) || isAugustToolName(tc?.function?.name));
+        const managedToolCalls = toolCalls.filter(tc =>
+            isMcpToolName(tc?.function?.name) ||
+            isAugustToolName(tc?.function?.name) ||
+            isManagedWebToolName(tc?.function?.name)
+        );
         if (managedToolCalls.length === 0) return data;
 
         if (managedToolCalls.length !== toolCalls.length) {
@@ -568,10 +973,15 @@ async function resolveManagedWebToolCalls(initialData, oReq, cfg) {
 }
 
 // ── Message translation: Anthropic -> OpenAI ──
-function translateMessages(anthropicMessages, ctx) {
+async function translateMessages(anthropicMessages, ctx) {
     const openaiMessages = [];
+    const repaired = await repairManagedWebToolResults(anthropicMessages);
+    const repairedAnthropicMessages = repaired.messages;
+    if (ctx && repaired.repairedCount > 0) {
+        ctx.repairedManagedWebToolResultCount = (ctx.repairedManagedWebToolResultCount || 0) + repaired.repairedCount;
+    }
 
-    anthropicMessages.forEach(m => {
+    repairedAnthropicMessages.forEach(m => {
         if (Array.isArray(m.content)) {
             // Look for tool_result block
             const toolResultBlock = m.content.find(c => c.type === 'tool_result');
@@ -580,9 +990,7 @@ function translateMessages(anthropicMessages, ctx) {
                 openaiMessages.push({
                     role: 'tool',
                     tool_call_id: openaiId || toolResultBlock.tool_use_id,
-                    content: typeof toolResultBlock.content === 'string'
-                        ? toolResultBlock.content
-                        : JSON.stringify(toolResultBlock.content)
+                    content: extractToolResultText(toolResultBlock.content)
                 });
             } else if (m.role === 'assistant') {
                 // Assistant message with tool_use blocks -> needs tool_calls array
@@ -694,7 +1102,14 @@ async function buildOpenAIRequest(aReq, ctx, cfg) {
     const systemPrompt = buildOpenAISystemPrompt(effectiveSystem);
     openaiMessages.push({ role: 'system', content: systemPrompt });
 
-    openaiMessages.push(...translateMessages(aReq.messages, ctx));
+    openaiMessages.push(...await translateMessages(aReq.messages, ctx));
+
+    if (ctx.repairedManagedWebToolResultCount > 0) {
+        openaiMessages.push({
+            role: 'user',
+            content: '[SYSTEM NOTE] A previously blocked web fetch/search result was repaired locally by the proxy and the tool result above now contains the successful fetched content. Treat that tool result as authoritative and continue from it directly. Do not claim network egress is blocked, and do not refetch the same public page with browser or shell tools unless the repaired content is empty.'
+        });
+    }
 
     // Tool result scrubbing
     openaiMessages.forEach(m => {
@@ -877,18 +1292,30 @@ function buildAnthropicUpstreamRequest(aReq, cfg, upstreamModelOverride) {
     };
 
     if (aReq.tools && aReq.tools.length > 0) {
-        // Smart client (e.g. Claude Desktop). The client manages its own tools.
-        // DO NOT inject proxy tools here, otherwise the client will crash when the AI tries to use them.
-        upstreamReq.tools = [ ...aReq.tools ];
+        // Smart client (e.g. Claude Desktop). Copy client tools, then strip browser-automation
+        // tools and inject local web tools so the proxy can intercept them regardless of provider.
+        upstreamReq.tools = dedupeAndCanonicalizeAnthropicTools(aReq.tools);
+        const existingNames = new Set(upstreamReq.tools.map(t => t?.name).filter(Boolean));
+        const missingWebTools = getCanonicalManagedAnthropicWebTools()
+            .filter(tool => !existingNames.has(tool.name));
+        if (missingWebTools.length > 0) {
+            upstreamReq.tools.push(...missingWebTools);
+            console.log('[Proxy] Injected managed web tools for all providers:', missingWebTools.map(t => t.name));
+        }
     } else {
-        // Dumb client (e.g. Mobile App). Inject both MCP and August native execution tools.
+        // Dumb client (e.g. Mobile App). Inject MCP + August + web tools — always.
         const mappedMcpTools = getMcpToolDefinitions().map(openAiToAnthropicTool);
         const mappedAugustTools = getAugustToolDefinitions().map(openAiToAnthropicTool);
-        upstreamReq.tools = [ ...mappedMcpTools, ...mappedAugustTools ];
+        const mappedWebTools = getCanonicalManagedAnthropicWebTools();
+        upstreamReq.tools = [ ...mappedMcpTools, ...mappedAugustTools, ...mappedWebTools ];
     }
     if (aReq.tool_choice) upstreamReq.tool_choice = aReq.tool_choice;
     if (aReq.metadata) upstreamReq.metadata = aReq.metadata;
     if (aReq.stream !== undefined) upstreamReq.stream = aReq.stream;
+    const clientToolGuidance = buildClientToolGuidance(aReq.tools);
+    if (clientToolGuidance && Array.isArray(upstreamReq.system) && upstreamReq.system[0]?.type === 'text') {
+        upstreamReq.system[0].text += '\n\n---\n\n' + clientToolGuidance;
+    }
     return upstreamReq;
 }
 
@@ -931,17 +1358,12 @@ async function executeManagedAnthropicToolUses(toolUses, knownTools, requestPayl
 
         try {
             let result;
-            if (isAugustToolName(toolName)) {
-                logActivity('AUGUST', `${toolName} executed locally`);
-                result = await executeAugustToolCall(toolName, parsedArgs);
-            } else if (isMcpToolName(toolName)) {
-                result = await executeMcpToolCall(toolName, parsedArgs);
-            }
+            result = await executeManagedProxyTool(toolName, parsedArgs);
 
             toolResults.push({
                 type: 'tool_result',
                 tool_use_id: toolUse.id,
-                content: result
+                content: formatManagedToolResult(toolName, result)
             });
         } catch (e) {
             toolResults.push({
@@ -953,6 +1375,85 @@ async function executeManagedAnthropicToolUses(toolUses, knownTools, requestPayl
     }
 
     return toolResults;
+}
+/**
+ * Simulates an Anthropic SSE stream from a fully-resolved JSON response.
+ * Used when the client requested stream:true but we forced stream:false upstream
+ * in order to intercept and execute managed local tool calls (web search / fetch).
+ * This ensures Claude Desktop receives proper streaming SSE events.
+ */
+function sendSimulatedAnthropicStream(res, parsed, clientFacingModel) {
+    const msgId = parsed.id || 'msg_' + Math.random().toString(36).substring(2, 14);
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive'
+    });
+
+    // 1. message_start
+    res.write(`event: message_start\ndata: ${JSON.stringify({
+        type: 'message_start',
+        message: {
+            id: msgId, type: 'message', role: 'assistant', content: [],
+            model: clientFacingModel,
+            stop_reason: null, stop_sequence: null,
+            usage: { input_tokens: parsed.usage?.input_tokens || 0, output_tokens: 0 }
+        }
+    })}\n\n`);
+
+    const blocks = Array.isArray(parsed.content) ? parsed.content : [];
+    blocks.forEach((block, index) => {
+        // 2. content_block_start
+        res.write(`event: content_block_start\ndata: ${JSON.stringify({
+            type: 'content_block_start', index,
+            content_block: {
+                type: block.type,
+                ...(block.type === 'text'     ? { text: '' }     : {}),
+                ...(block.type === 'thinking' ? { thinking: '' } : {}),
+                ...(block.type === 'tool_use'
+                    ? {
+                        id: block.id,
+                        name: block.name,
+                        input: {}
+                    }
+                    : {})
+            }
+        })}\n\n`);
+
+        // 3. content_block_delta (full content in one delta — no chunking needed)
+        if (block.type === 'thinking') {
+            res.write(`event: content_block_delta\ndata: ${JSON.stringify({
+                type: 'content_block_delta', index,
+                delta: { type: 'thinking_delta', thinking: block.thinking || '' }
+            })}\n\n`);
+        } else if (block.type === 'tool_use') {
+            res.write(`event: content_block_delta\ndata: ${JSON.stringify({
+                type: 'content_block_delta', index,
+                delta: { type: 'input_json_delta', partial_json: JSON.stringify(block.input || {}) }
+            })}\n\n`);
+        } else {
+            res.write(`event: content_block_delta\ndata: ${JSON.stringify({
+                type: 'content_block_delta', index,
+                delta: { type: 'text_delta', text: block.text || '' }
+            })}\n\n`);
+        }
+
+        // 4. content_block_stop
+        res.write(`event: content_block_stop\ndata: ${JSON.stringify({
+            type: 'content_block_stop', index
+        })}\n\n`);
+    });
+
+    // 5. message_delta
+    res.write(`event: message_delta\ndata: ${JSON.stringify({
+        type: 'message_delta',
+        delta: { stop_reason: parsed.stop_reason || 'end_turn', stop_sequence: null },
+        usage: { output_tokens: parsed.usage?.output_tokens || 0 }
+    })}\n\n`);
+
+    // 6. message_stop
+    res.write(`event: message_stop\ndata: ${JSON.stringify({ type: 'message_stop' })}\n\n`);
+    res.end();
 }
 
 async function resolveManagedAnthropicToolUses(initialParsed, upstreamReq, cfg) {
@@ -967,7 +1468,11 @@ async function resolveManagedAnthropicToolUses(initialParsed, upstreamReq, cfg) 
         const toolUses = content.filter(block => block?.type === 'tool_use');
         if (toolUses.length === 0) return parsed;
 
-        const managedToolUses = toolUses.filter(toolUse => isMcpToolName(toolUse?.name) || isAugustToolName(toolUse?.name));
+        const managedToolUses = toolUses.filter(toolUse =>
+            isMcpToolName(toolUse?.name) ||
+            isAugustToolName(toolUse?.name) ||
+            isManagedWebToolName(toolUse?.name)
+        );
         if (managedToolUses.length === 0) return parsed;
 
         if (managedToolUses.length !== toolUses.length) {
@@ -1058,6 +1563,36 @@ function rewriteAnthropicResponseModel(rawBody, contentType, responseModel) {
     }
 
     return rawBody;
+}
+
+function isClaudeDesktop3pClient(req) {
+    const ua = String(req?.headers?.['user-agent'] || '').toLowerCase();
+    return ua.includes('claude-desktop-3p');
+}
+
+function normalizeAnthropicResponseForClaudeDesktop3p(parsed) {
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.content)) {
+        return parsed;
+    }
+
+    const normalized = {
+        ...parsed,
+        content: parsed.content.filter(Boolean)
+    };
+
+    // Claude Desktop 3p appears to assume text-first content in some paths.
+    // Remove thinking blocks and guarantee a leading text block on tool turns.
+    normalized.content = normalized.content.filter(block => block?.type !== 'thinking');
+
+    const hasToolUse = normalized.content.some(block => block?.type === 'tool_use');
+    if (hasToolUse && normalized.content[0]?.type !== 'text') {
+        normalized.content.unshift({
+            type: 'text',
+            text: 'Continuing with tool execution.'
+        });
+    }
+
+    return normalized;
 }
 
 function summarizeHeaders(headersLike) {
@@ -1261,17 +1796,24 @@ async function handleMessages(req, res, cleanPath, reqId) {
                 const ctx = { managedLocalToolNames: new Set() };
                 let upstreamReq = buildAnthropicUpstreamRequest(aReq, cfg, upstreamModel);
                 
-                // Filter out WebSearch and WebFetch for Minimax - handle them locally instead
-                if (cfg.targetUrl.includes('minimax.io')) {
-                    const webTools = upstreamReq.tools?.filter(t => t.name === 'WebSearch' || t.name === 'WebFetch') || [];
-                    if (webTools.length > 0) {
-                        console.log('[Proxy] Filtering web tools for Minimax, will handle locally:', webTools.map(t => t.name));
-                        upstreamReq.tools = upstreamReq.tools.filter(t => t.name !== 'WebSearch' && t.name !== 'WebFetch');
-                        webTools.forEach(t => ctx.managedLocalToolNames.add(t.name));
-                    }
+                // Mark ALL managed web tools for local resolution — no provider guard.
+                // Previously only activated on minimax.io which meant Claude Desktop and
+                // all other providers silently skipped the local web tool loop.
+                const webTools = upstreamReq.tools?.filter(t => isManagedWebToolName(t?.name)) || [];
+                if (webTools.length > 0) {
+                    console.log('[Proxy] Marking web tools for local resolution:', webTools.map(t => t.name));
+                    webTools.forEach(t => ctx.managedLocalToolNames.add(t.name));
                 }
                 
                 upstreamReq = normalizeAnthropicToolsForNativeUpstream(upstreamReq, ctx);
+
+                // KEY FIX: if we have managed tools to intercept locally, force non-streaming
+                // upstream so we can run the tool loop synchronously, then stream back ourselves.
+                const clientWantsStream = aReq.stream === true;
+                if (ctx.managedLocalToolNames.size > 0 && clientWantsStream) {
+                    console.log('[Proxy] Forcing non-streaming upstream to intercept managed tool calls');
+                    upstreamReq.stream = false;
+                }
                 console.log(`[Proxy Debug Claude]: incoming_model=${aReq.model || 'unknown'} public_model=${requestModel} backend_model=${upstreamModel} target=${cfg.targetUrl || 'unknown'}`);
                 console.log('[Proxy Debug Tools]:', JSON.stringify({ 
                     toolCount: upstreamReq.tools?.length || 0,
@@ -1340,9 +1882,29 @@ async function handleMessages(req, res, cleanPath, reqId) {
                 if (contentType.includes('text/event-stream')) {
                     // SSE stream: reconstruct full response to capture it for debug UI
                     try {
-                        const parsed = parseAnthropicSSEToJSON(rawBody);
+                        let parsed = parseAnthropicSSEToJSON(rawBody);
+                        if (isClaudeDesktop3pClient(req)) {
+                            // Capture BEFORE normalizing so thinking blocks are preserved in the debug UI
+                            captureResponse(reqId, parsed);
+                            captureTokens(reqId, parsed.usage?.input_tokens || 0, parsed.usage?.output_tokens || 0);
+                            parsed = normalizeAnthropicResponseForClaudeDesktop3p(parsed);
+                            sendSimulatedAnthropicStream(res, parsed, clientFacingModel);
+
+                            if (parsed.stop_reason === 'end_turn') {
+                                const { extractAndSaveMemories } = require('../utils/auto-memory');
+                                extractAndSaveMemories(aReq.messages, parsed, cfg, upstreamModel).catch(() => {});
+                            }
+                            return; // finishRequest() runs in finally
+                        }
+
                         captureResponse(reqId, parsed);
                         captureTokens(reqId, parsed.usage?.input_tokens || 0, parsed.usage?.output_tokens || 0);
+
+                        // --- AUTO-MEMORY BACKGROUND EXTRACTION ---
+                        if (parsed.stop_reason === 'end_turn') {
+                            const { extractAndSaveMemories } = require('../utils/auto-memory');
+                            extractAndSaveMemories(aReq.messages, parsed, cfg, upstreamModel).catch(() => {});
+                        }
                     } catch (e) {
                         console.warn('[Proxy SSE Parse Warning]: Failed to reconstruct Anthropic response for capture:', e.message);
                     }
@@ -1352,10 +1914,33 @@ async function handleMessages(req, res, cleanPath, reqId) {
                         if (ctx.managedLocalToolNames.size > 0) {
                             parsed = await resolveManagedAnthropicToolUses(parsed, upstreamReq, cfg);
                             parsed.model = clientFacingModel;
-                            clientBody = JSON.stringify(parsed);
                         }
+                        // Capture BEFORE normalizing so thinking blocks are preserved in the debug UI
                         captureResponse(reqId, parsed);
                         captureTokens(reqId, parsed.usage?.input_tokens || 0, parsed.usage?.output_tokens || 0);
+                        if (isClaudeDesktop3pClient(req)) {
+                            parsed = normalizeAnthropicResponseForClaudeDesktop3p(parsed);
+                        }
+                        clientBody = JSON.stringify(parsed);
+
+                        // KEY FIX: if the client originally wanted a stream, simulate one now
+                        // from the fully-resolved JSON so Claude Desktop gets proper SSE events.
+                        if (clientWantsStream && ctx.managedLocalToolNames.size > 0) {
+                            sendSimulatedAnthropicStream(res, parsed, clientFacingModel);
+                            
+                            // --- AUTO-MEMORY BACKGROUND EXTRACTION ---
+                            if (parsed.stop_reason === 'end_turn') {
+                                const { extractAndSaveMemories } = require('../utils/auto-memory');
+                                extractAndSaveMemories(aReq.messages, parsed, cfg, upstreamModel).catch(() => {});
+                            }
+                            return; // finishRequest() runs in finally
+                        }
+
+                        // --- AUTO-MEMORY BACKGROUND EXTRACTION (Non-stream tool resolution case) ---
+                        if (parsed.stop_reason === 'end_turn') {
+                            const { extractAndSaveMemories } = require('../utils/auto-memory');
+                            extractAndSaveMemories(aReq.messages, parsed, cfg, upstreamModel).catch(() => {});
+                        }
                     } catch (e) { /* ignore */ }
                 }
 
@@ -1440,6 +2025,12 @@ async function handleMessages(req, res, cleanPath, reqId) {
             console.log(`[Proxy Upstream]: usage in=${upInputTokens} out=${upOutputTokens}, reasoning=${!!(upChoice?.message?.reasoning || upChoice?.message?.reasoning_content)}`);
 
             const aRes = translateOpenAIResponse(data, clientFacingModel, ctx);
+
+            // --- AUTO-MEMORY BACKGROUND EXTRACTION (OpenAI translation path) ---
+            if (finishReason === 'stop') {
+                const { extractAndSaveMemories } = require('../utils/auto-memory');
+                extractAndSaveMemories(aReq.messages, data, cfg, upstreamModel).catch(() => {});
+            }
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(aRes));

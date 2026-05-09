@@ -1,0 +1,27 @@
+{
+  "model": "claude-opus-4-6",
+  "max_tokens": 300,
+  "stream": true,
+  "tools": [
+    {
+      "name": "TodoWrite",
+      "description": "Write a todo list for the current task",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "todos": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "required": ["todos"]
+      }
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "Create a todo list for researching MiniMax docs using the TodoWrite tool."
+    }
+  ]
+}

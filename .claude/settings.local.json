@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mv claude-local.bat scripts/)",
+      "Bash(mv codex-local.bat scripts/)",
+      "Bash(mv install-global.bat scripts/)",
+      "Bash(mv install-global.ps1 scripts/)",
+      "Bash(mv mock-upstream.js scripts/)",
+      "Bash(mv test-tool-flow.js tests/)",
+      "Bash(mv test-parallel.js tests/)",
+      "Bash(mv test-ui-pipeline.js tests/)",
+      "Bash(mv test-web-search.js tests/)",
+      "Bash(node --check src/bridge.js)",
+      "Bash(node --check src/launch.js)",
+      "Bash(node --check src/adapters/anthropic.js)",
+      "Bash(node --check src/adapters/openai.js)",
+      "Bash(node --check src/utils/local-web.js)",
+      "Bash(node -e ' *)"
+    ]
+  }
+}

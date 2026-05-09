@@ -1,0 +1,10 @@
+{
+  "model": "claude-opus-4-6",
+  "max_tokens": 800,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Use mcp__workspace__web_fetch to fetch https://www.minimax.io/, then summarize the key documentation or developer links you find. Do not use browser tools."
+    }
+  ]
+}

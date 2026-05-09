@@ -189,6 +189,10 @@
                         <span>Thinking</span>
                         <span class="text-xs text-slate-400">05</span>
                     </button>
+                    <button type="button" class="section-nav flex w-full items-center justify-between rounded-xl px-3 py-3 text-left text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100" data-section="memory" onclick="switchSection('memory')">
+                        <span>August Brain</span>
+                        <span class="text-xs text-slate-400">06</span>
+                    </button>
                 </nav>
 
                 <div class="mt-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/60 p-4">
@@ -244,6 +248,7 @@
                         <button type="button" class="section-nav shrink-0 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300" data-section="traffic" onclick="switchSection('traffic')">Traffic</button>
                         <button type="button" class="section-nav shrink-0 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300" data-section="inspector" onclick="switchSection('inspector')">Inspector</button>
                         <button type="button" class="section-nav shrink-0 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300" data-section="thinking" onclick="switchSection('thinking')">Thinking</button>
+                        <button type="button" class="section-nav shrink-0 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300" data-section="memory" onclick="switchSection('memory')">August Brain</button>
                     </div>
                 </div>
             </header>
@@ -654,6 +659,80 @@
                     </div>
                     <div id="thinkingList" class="p-5 space-y-3">
                         <div class="text-slate-400 dark:text-slate-500 text-sm italic">Thinking traces will appear here...</div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="section-memory" class="dashboard-section hidden space-y-4">
+                <div class="surface overflow-hidden rounded-3xl">
+                    <div class="px-5 py-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center">
+                        <div>
+                            <h2 class="text-sm font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wider">August Core Memory</h2>
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">The persistent brain of your AI. It learns automatically in the background.</p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button onclick="refreshMemoryUI()" class="minimal-button rounded-xl px-4 py-2.5 text-xs font-semibold">&#8635; Refresh</button>
+                            <button onclick="saveMemoryUI()" class="minimal-button primary rounded-xl px-4 py-2.5 text-xs font-semibold">Save Changes</button>
+                        </div>
+                    </div>
+                    <div id="memoryLastSync" class="px-5 py-2 text-[10px] text-slate-400 dark:text-slate-500 border-b border-slate-100 dark:border-slate-800">Last synced: --</div>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div class="surface overflow-hidden rounded-3xl">
+                        <div class="px-5 py-3 border-b border-slate-100 dark:border-slate-700">
+                            <div class="flex items-center gap-2"><span class="text-base">&#128100;</span><h3 class="text-xs font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wider">User Profile</h3></div>
+                            <p class="mt-1 text-[10px] text-slate-400 dark:text-slate-500">Who you are &mdash; remembered across all sessions</p>
+                        </div>
+                        <div class="p-4"><textarea id="memoryUserProfile" class="minimal-input w-full h-32 rounded-xl p-3 text-sm font-mono leading-relaxed resize-y" placeholder="No profile details recorded yet..."></textarea></div>
+                    </div>
+                    <div class="surface overflow-hidden rounded-3xl">
+                        <div class="px-5 py-3 border-b border-slate-100 dark:border-slate-700">
+                            <div class="flex items-center gap-2"><span class="text-base">&#129504;</span><h3 class="text-xs font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wider">Global Context</h3></div>
+                            <p class="mt-1 text-[10px] text-slate-400 dark:text-slate-500">What the AI has learned &mdash; auto-extracted from conversations</p>
+                        </div>
+                        <div class="p-4"><textarea id="memoryGlobalContext" class="minimal-input w-full h-48 rounded-xl p-3 text-sm font-mono leading-relaxed resize-y" placeholder="No cross-session context established..."></textarea></div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div class="surface overflow-hidden rounded-3xl">
+                        <div class="px-5 py-3 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
+                            <div class="flex items-center gap-2"><span class="text-base">&#128194;</span><h3 class="text-xs font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wider">Active Projects</h3></div>
+                            <span id="memoryProjectCount" class="text-[10px] text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-full">0</span>
+                        </div>
+                        <div id="memoryProjects" class="p-4 space-y-2 max-h-64 overflow-y-auto"><p class="text-xs text-slate-400 dark:text-slate-500 italic">No projects tracked yet</p></div>
+                    </div>
+                    <div class="surface overflow-hidden rounded-3xl">
+                        <div class="px-5 py-3 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
+                            <div class="flex items-center gap-2"><span class="text-base">&#128268;</span><h3 class="text-xs font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wider">Integrations</h3></div>
+                            <span id="memoryIntegrationCount" class="text-[10px] text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-full">0</span>
+                        </div>
+                        <div id="memoryIntegrations" class="p-4 space-y-2 max-h-64 overflow-y-auto"><p class="text-xs text-slate-400 dark:text-slate-500 italic">No integrations recorded</p></div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div class="surface overflow-hidden rounded-3xl">
+                        <div class="px-5 py-3 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
+                            <div class="flex items-center gap-2"><span class="text-base">&#128203;</span><h3 class="text-xs font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wider">Recent Events</h3></div>
+                            <span id="memoryEventCount" class="text-[10px] text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-full">0</span>
+                        </div>
+                        <div id="memoryEvents" class="p-4 space-y-2 max-h-72 overflow-y-auto"><p class="text-xs text-slate-400 dark:text-slate-500 italic">No events recorded</p></div>
+                    </div>
+                    <div class="surface overflow-hidden rounded-3xl">
+                        <div class="px-5 py-3 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
+                            <div class="flex items-center gap-2"><span class="text-base">&#128278;</span><h3 class="text-xs font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wider">Conversation Checkpoints</h3></div>
+                            <span id="memoryCheckpointCount" class="text-[10px] text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-full">0</span>
+                        </div>
+                        <div id="memoryCheckpoints" class="p-4 space-y-2 max-h-72 overflow-y-auto"><p class="text-xs text-slate-400 dark:text-slate-500 italic">No checkpoints saved</p></div>
+                    </div>
+                </div>
+
+                <div class="surface rounded-3xl px-5 py-3">
+                    <div class="flex items-center justify-between text-[10px] text-slate-400 dark:text-slate-500">
+                        <span>Memory file: src/august_core_memory.json</span>
+                        <span id="memoryFileSize">--</span>
                     </div>
                 </div>
             </section>
@@ -1097,7 +1176,7 @@
         function renderThinkingTraceCard(item, responsePanels) {
             const requestText = extractRequestMessageSummary(item?.requestBody);
             const thinkingText = extractThinkingSummary(item, responsePanels);
-            if (!requestText || !thinkingText) return '';
+            if (!thinkingText) return '';
 
             const sectionBlock = (title, content, tone) => {
                 if (!content) return '';
@@ -1694,7 +1773,7 @@
                 const data = await res.json();
                 thinkingData = data.filter(item => {
                     const responsePanels = extractResponsePanels(item.responseBody);
-                    return Boolean(extractRequestMessageSummary(item.requestBody) && extractThinkingSummary(item, responsePanels));
+                    return Boolean(extractThinkingSummary(item, responsePanels));
                 });
                 lastThinkingRenderKey = buildInspectorRenderKey(thinkingData);
                 renderThinking();
@@ -2387,6 +2466,106 @@
                 toast.style.transform = 'translateY(8px)';
             }, 3000);
         }
+        
+        function escMemHtml(str) {
+            if (!str) return '';
+            return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
+        async function loadMemoryUI() {
+            try {
+                const res = await fetch('/ui/memory');
+                const memory = await res.json();
+                document.getElementById('memoryUserProfile').value = memory.user_profile || '';
+                document.getElementById('memoryGlobalContext').value = memory.global_context || '';
+
+                // Active Projects
+                const projectsEl = document.getElementById('memoryProjects');
+                const projects = Array.isArray(memory.active_projects) ? memory.active_projects : [];
+                document.getElementById('memoryProjectCount').textContent = projects.length;
+                if (projects.length === 0) {
+                    projectsEl.innerHTML = '<p class="text-xs text-slate-400 dark:text-slate-500 italic">No projects tracked yet</p>';
+                } else {
+                    projectsEl.innerHTML = projects.map(p => {
+                        const statusBadge = p.status ? `<span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300">${escMemHtml(p.status)}</span>` : '';
+                        const summary = p.summary ? `<p class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">${escMemHtml(p.summary)}</p>` : '';
+                        const date = p.updated_at ? `<p class="mt-1 text-[9px] text-slate-400 dark:text-slate-500">${new Date(p.updated_at).toLocaleString()}</p>` : '';
+                        return `<div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 px-3 py-2"><div class="flex items-center justify-between"><span class="text-xs font-semibold text-slate-700 dark:text-slate-200">${escMemHtml(p.name || 'Untitled')}</span>${statusBadge}</div>${summary}${date}</div>`;
+                    }).join('');
+                }
+
+                // Integrations
+                const intEl = document.getElementById('memoryIntegrations');
+                const integrations = memory.integrations && typeof memory.integrations === 'object' ? Object.entries(memory.integrations) : [];
+                document.getElementById('memoryIntegrationCount').textContent = integrations.length;
+                if (integrations.length === 0) {
+                    intEl.innerHTML = '<p class="text-xs text-slate-400 dark:text-slate-500 italic">No integrations recorded</p>';
+                } else {
+                    intEl.innerHTML = integrations.map(([name, d]) => {
+                        const statusBadge = d?.status ? `<span class="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">${escMemHtml(d.status)}</span>` : '';
+                        const summary = d?.summary ? `<p class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">${escMemHtml(d.summary)}</p>` : '';
+                        return `<div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 px-3 py-2"><div class="flex items-center justify-between"><span class="text-xs font-semibold text-slate-700 dark:text-slate-200">${escMemHtml(name)}</span>${statusBadge}</div>${summary}</div>`;
+                    }).join('');
+                }
+
+                // Recent Events
+                const evEl = document.getElementById('memoryEvents');
+                const events = Array.isArray(memory.recent_events) ? memory.recent_events : [];
+                document.getElementById('memoryEventCount').textContent = events.length;
+                if (events.length === 0) {
+                    evEl.innerHTML = '<p class="text-xs text-slate-400 dark:text-slate-500 italic">No events recorded</p>';
+                } else {
+                    evEl.innerHTML = events.slice().reverse().map(ev => {
+                        const ts = ev.timestamp ? `<span class="text-[9px] text-slate-400 dark:text-slate-500">${new Date(ev.timestamp).toLocaleString()}</span>` : '';
+                        const src = ev.source ? `<span class="text-[9px] text-slate-400 dark:text-slate-500">via ${escMemHtml(ev.source)}</span>` : '';
+                        return `<div class="flex gap-3 items-start py-1.5 border-b border-slate-100 dark:border-slate-800 last:border-0"><span class="shrink-0 mt-0.5 w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-slate-600"></span><div class="min-w-0"><p class="text-[11px] text-slate-600 dark:text-slate-300">${escMemHtml(ev.summary || '')}</p><div class="flex gap-2 mt-0.5">${ts}${src}</div></div></div>`;
+                    }).join('');
+                }
+
+                // Conversation Checkpoints
+                const cpEl = document.getElementById('memoryCheckpoints');
+                const checkpoints = Array.isArray(memory.conversation_checkpoints) ? memory.conversation_checkpoints : [];
+                document.getElementById('memoryCheckpointCount').textContent = checkpoints.length;
+                if (checkpoints.length === 0) {
+                    cpEl.innerHTML = '<p class="text-xs text-slate-400 dark:text-slate-500 italic">No checkpoints saved</p>';
+                } else {
+                    cpEl.innerHTML = checkpoints.slice().reverse().map(cp => {
+                        const topic = cp.topic ? `<span class="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase">${escMemHtml(cp.topic)}</span>` : '';
+                        const ts = cp.timestamp ? `<p class="mt-1 text-[9px] text-slate-400 dark:text-slate-500">${new Date(cp.timestamp).toLocaleString()}</p>` : '';
+                        return `<div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 px-3 py-2">${topic}<p class="text-[11px] text-slate-600 dark:text-slate-300 ${cp.topic ? 'mt-1' : ''}">${escMemHtml(cp.summary || '')}</p>${ts}</div>`;
+                    }).join('');
+                }
+
+                document.getElementById('memoryLastSync').textContent = 'Last synced: ' + new Date().toLocaleTimeString();
+            } catch (e) {
+                console.error('Failed to load memory', e);
+            }
+        }
+
+        function refreshMemoryUI() {
+            loadMemoryUI();
+            showStatus('Memory refreshed', 'bg-slate-700 text-white');
+        }
+        
+        async function saveMemoryUI() {
+            try {
+                const user_profile = document.getElementById('memoryUserProfile').value;
+                const global_context = document.getElementById('memoryGlobalContext').value;
+                const res = await fetch('/ui/memory', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_profile, global_context })
+                });
+                if (res.ok) {
+                    showStatus('Memory saved successfully!', 'bg-emerald-600 text-white');
+                    loadMemoryUI();
+                } else {
+                    showStatus('Failed to save memory', 'bg-red-600 text-white');
+                }
+            } catch (e) {
+                showStatus('Network error saving memory', 'bg-red-600 text-white');
+            }
+        }
 
         // ── Init ── (every step wrapped so one failure never blocks another)
         console.log('[Init] Starting...');
@@ -2443,10 +2622,12 @@
         try { if (sectionVisible('thinking')) loadThinking().then(()=>console.log('[Init] ✓ thinking')).catch(e=>console.error('[Init] ✗ thinking:',e)); } catch(e) { console.error('[Init] ✗ thinking dispatch:', e); }
         try { loadBookmarks().then(()=>console.log('[Init] ✓ bookmarks')).catch(e=>console.error('[Init] ✗ bookmarks:',e)); } catch(e) { console.error('[Init] ✗ bookmarks dispatch:', e); }
         try { loadModels().then(()=>console.log('[Init] ✓ models')).catch(e=>console.error('[Init] ✗ models:',e)); } catch(e) { console.error('[Init] ✗ models dispatch:', e); }
+        try { loadMemoryUI().then(()=>console.log('[Init] ✓ memory')).catch(e=>console.error('[Init] ✗ memory:',e)); } catch(e) { console.error('[Init] ✗ memory dispatch:', e); }
         try {
             pollHandles = [ setInterval(() => {
                 if (sectionVisible('inspector')) loadInspector();
                 if (sectionVisible('thinking')) loadThinking();
+                if (sectionVisible('memory')) loadMemoryUI();
             }, 5000) ];
             console.log('[Init] ✓ poll');
         } catch(e) { console.error('[Init] ✗ poll:', e); }

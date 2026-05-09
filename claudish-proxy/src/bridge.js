@@ -7,8 +7,10 @@ const { getActivityLog, startRequest, endRequest, getRequestLog, getPendingReque
 const anthropicAdapter = require('./adapters/anthropic');
 const openaiAdapter = require('./adapters/openai');
 const { startMcpServers } = require('./utils/mcp-client');
+const { executeManagedWebTool } = require('./utils/local-web');
 
 const UI_PATH = path.join(__dirname, 'ui.html');
+const LISTEN_PORT = Number(process.env.CLAUDISH_PROXY_PORT || process.env.PORT || 8080);
 
 function summarizeRequestHeaders(headers) {
     const result = {};
@@ -261,6 +263,28 @@ const server = http.createServer(async (req, res) => {
         return res.end(JSON.stringify(detail || { error: 'Not found' }));
     }
 
+    if (req.url === '/ui/memory' && req.method === 'GET') {
+        const { readAugustCoreMemory } = require('./utils/august-tools');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify(readAugustCoreMemory()));
+    }
+
+    if (req.url === '/ui/memory' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', () => {
+            const data = JSON.parse(body);
+            const { readAugustCoreMemory, writeAugustCoreMemory } = require('./utils/august-tools');
+            const memory = readAugustCoreMemory();
+            if (data.global_context !== undefined) memory.global_context = data.global_context;
+            if (data.user_profile !== undefined) memory.user_profile = data.user_profile;
+            writeAugustCoreMemory(memory);
+            res.writeHead(200);
+            res.end('OK');
+        });
+        return;
+    }
+
     if (req.url === '/ui/models' && req.method === 'GET') {
         const providers = [
             { name: 'Kilocode', url: 'https://api.kilo.ai/api/gateway', base: 'https://api.kilo.ai/api/gateway', key: process.env.KILOCODE_API_KEY },
@@ -483,25 +507,13 @@ const server = http.createServer(async (req, res) => {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ error: 'Missing q parameter' }));
         }
-        try {
-            const searchUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_redirect=1`;
-            const response = await fetch(searchUrl, {
-                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ClaudishProxy/1.0)' },
-                signal: AbortSignal.timeout(10000)
-            });
-            const data = await response.json();
-            // Extract top results
-            const results = (data.RelatedTopics || []).slice(0, 10).map(t => ({
-                title: t.Text || '',
-                url: t.FirstURL || '',
-                snippet: (t.Text || '').substring(0, 200)
-            })).filter(r => r.url);
+            try {
+            // Delegate to the same robust HTML scraper used by the managed tool loop.
+            // Previously used api.duckduckgo.com which only returns Instant Answers,
+            // not real web-page search results.
+            const searchResult = await executeManagedWebTool('web_search', { query, max_results: 10 });
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({
-                query: query,
-                results: results,
-                abstract: data.AbstractText || ''
-            }));
+            return res.end(JSON.stringify(searchResult));
         } catch (e) {
             res.writeHead(500, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ error: e.message }));
@@ -530,12 +542,16 @@ const server = http.createServer(async (req, res) => {
                 return res.end(JSON.stringify({ error: 'Access to internal/network addresses is not permitted' }));
             }
             const protocol = parsed.protocol === 'https:' ? https : http;
+                    let fetchDone = false; // guard: exactly one of end/error/timeout may respond
+
             const proxyReq = protocol.get(targetUrl, {
                 headers: { 'User-Agent': 'ClaudishProxy/1.0', 'Accept': '*/*' }
             }, function(proxyRes) {
                 let data = '';
                 proxyRes.on('data', function(chunk) { data += chunk; });
                 proxyRes.on('end', function() {
+                    if (fetchDone) return;
+                    fetchDone = true;
                     if (data.length > 500000) data = data.substring(0, 500000) + '\n\n[Output truncated]';
                     res.writeHead(200, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({
@@ -547,11 +563,15 @@ const server = http.createServer(async (req, res) => {
                 });
             });
             proxyReq.on('error', function(e) {
+                if (fetchDone) return; // timeout already replied
+                fetchDone = true;
                 res.writeHead(500, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: e.message }));
             });
             proxyReq.setTimeout(15000, function() {
-                proxyReq.destroy();
+                if (fetchDone) return;
+                fetchDone = true;
+                proxyReq.destroy(); // safe — error handler is now guarded
                 res.writeHead(504, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: 'Request timed out after 15s' }));
             });
@@ -625,16 +645,16 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify({ error: 'Not Found' }));
 });
 
-console.log('--- AI Adapter Active on Port 8080 ---');
+console.log(`--- AI Adapter Active on Port ${LISTEN_PORT} ---`);
 
 // Initialize MCP Servers async (if enabled)
 // Will use config key if available, or fallback to env var
 const claudeProfile = getProfile('claude');
 startMcpServers(claudeProfile?.apiKey || '').then(() => {
-    server.listen(8080, '0.0.0.0');
+    server.listen(LISTEN_PORT, '0.0.0.0');
     console.log('[bridge] Server is listening...');
 }).catch(e => {
     console.error('[bridge] Failed to start MCP servers:', e);
     // Start anyway so proxy doesn't completely die if MCP fails
-    server.listen(8080, '0.0.0.0');
+    server.listen(LISTEN_PORT, '0.0.0.0');
 });

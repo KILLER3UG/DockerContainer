@@ -26,6 +26,20 @@ function validateToolArguments(toolCall, toolDefinitions, messages = []) {
         };
     }
 
+    // Compatibility shim for stale WebFetch/WebSearch tool schemas seen by some
+    // third-party Claude clients. If the model sends `prompt` instead of the
+    // proxy's canonical `url` / `query`, normalize it before schema checks.
+    if (toolName === 'WebFetch' || toolName === 'web_fetch' || toolName === 'mcp__workspace__web_fetch') {
+        if ((args.url === undefined || args.url === null || args.url === '') && typeof args.prompt === 'string' && args.prompt.trim()) {
+            args.url = args.prompt.trim();
+        }
+    }
+    if (toolName === 'WebSearch' || toolName === 'web_search' || toolName === 'mcp__workspace__web_search') {
+        if ((args.query === undefined || args.query === null || args.query === '') && typeof args.prompt === 'string' && args.prompt.trim()) {
+            args.query = args.prompt.trim();
+        }
+    }
+
     // ── The Proxy Execution Gate (Plan check) ──
     // Block code generation / file writes if a plan hasn't been formally established
     const mutatingTools = [

@@ -1,6 +1,6 @@
 {
   "claude": {
-    "currentModel": "claude-opus-4-6",
+    "currentModel": "claude-haiku-4-5-20251001",
     "targetUrl": "https://api.minimax.io/anthropic/v1/messages",
     "apiKey": "${env:MINIMAX_API_KEY}",
     "_upstreamModel": "MiniMax-M2.7",

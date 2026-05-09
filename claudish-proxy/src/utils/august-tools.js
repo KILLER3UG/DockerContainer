@@ -79,25 +79,146 @@ function checkCommandPaths(command) {
 
 const CORE_MEMORY_FILE = path.join(__dirname, '..', 'august_core_memory.json');
 
+function getDefaultAugustCoreMemory() {
+    return {
+        user_profile: "No profile details recorded yet. Use august__core_memory_append to add details about the user.",
+        global_context: "No cross-session context established.",
+        active_projects: [],
+        integrations: {},
+        recent_events: [],
+        conversation_checkpoints: []
+    };
+}
+
+function normalizeAugustCoreMemory(raw) {
+    const defaults = getDefaultAugustCoreMemory();
+    const merged = {
+        ...defaults,
+        ...(raw && typeof raw === 'object' ? raw : {})
+    };
+
+    if (typeof merged.user_profile !== 'string') merged.user_profile = defaults.user_profile;
+    if (typeof merged.global_context !== 'string') merged.global_context = defaults.global_context;
+    if (!Array.isArray(merged.active_projects)) merged.active_projects = [];
+    if (!merged.integrations || typeof merged.integrations !== 'object' || Array.isArray(merged.integrations)) merged.integrations = {};
+    if (!Array.isArray(merged.recent_events)) merged.recent_events = [];
+    if (!Array.isArray(merged.conversation_checkpoints)) merged.conversation_checkpoints = [];
+
+    merged.active_projects = merged.active_projects
+        .filter(p => p && typeof p === 'object' && p.name)
+        .slice(-20);
+    merged.recent_events = merged.recent_events
+        .filter(e => e && typeof e === 'object' && e.summary)
+        .slice(-40);
+    merged.conversation_checkpoints = merged.conversation_checkpoints
+        .filter(c => c && typeof c === 'object' && c.summary)
+        .slice(-20);
+
+    return merged;
+}
 
 function readAugustCoreMemory() {
     if (!fs.existsSync(CORE_MEMORY_FILE)) {
-        const defaultMemory = {
-            "user_profile": "No profile details recorded yet. Use august__core_memory_append to add details about the user.",
-            "global_context": "No cross-session context established."
-        };
+        const defaultMemory = getDefaultAugustCoreMemory();
         fs.writeFileSync(CORE_MEMORY_FILE, JSON.stringify(defaultMemory, null, 2));
         return defaultMemory;
     }
     try {
-        return JSON.parse(fs.readFileSync(CORE_MEMORY_FILE, 'utf8'));
+        return normalizeAugustCoreMemory(JSON.parse(fs.readFileSync(CORE_MEMORY_FILE, 'utf8')));
     } catch (e) {
-        return { error: "Failed to parse core memory." };
+        return normalizeAugustCoreMemory({ error: "Failed to parse core memory." });
     }
 }
 
 function writeAugustCoreMemory(data) {
-    fs.writeFileSync(CORE_MEMORY_FILE, JSON.stringify(data, null, 2));
+    fs.writeFileSync(CORE_MEMORY_FILE, JSON.stringify(normalizeAugustCoreMemory(data), null, 2));
+}
+
+function renderAugustCoreMemory(memoryInput) {
+    const memory = normalizeAugustCoreMemory(memoryInput);
+    const projects = memory.active_projects.length > 0
+        ? memory.active_projects.map(p => {
+            const status = p.status ? ` (${p.status})` : '';
+            const summary = p.summary ? `: ${p.summary}` : '';
+            return `- ${p.name}${status}${summary}`;
+        }).join('\n')
+        : '- none recorded';
+    const integrations = Object.keys(memory.integrations).length > 0
+        ? Object.entries(memory.integrations).map(([name, details]) => {
+            if (!details || typeof details !== 'object') return `- ${name}`;
+            const status = details.status ? ` (${details.status})` : '';
+            const summary = details.summary ? `: ${details.summary}` : '';
+            return `- ${name}${status}${summary}`;
+        }).join('\n')
+        : '- none recorded';
+    const recentEvents = memory.recent_events.length > 0
+        ? memory.recent_events.slice(-8).map(event => {
+            const when = event.timestamp ? `[${event.timestamp}] ` : '';
+            return `- ${when}${event.summary}`;
+        }).join('\n')
+        : '- none recorded';
+    const checkpoints = memory.conversation_checkpoints.length > 0
+        ? memory.conversation_checkpoints.slice(-6).map(cp => {
+            const topic = cp.topic ? `${cp.topic}: ` : '';
+            return `- ${topic}${cp.summary}`;
+        }).join('\n')
+        : '- none recorded';
+
+    return {
+        user_profile: memory.user_profile,
+        global_context: memory.global_context,
+        active_projects: projects,
+        integrations,
+        recent_events: recentEvents,
+        conversation_checkpoints: checkpoints
+    };
+}
+
+function upsertProject(memory, project) {
+    const normalized = normalizeAugustCoreMemory(memory);
+    const nextProject = {
+        name: project.name,
+        status: project.status || '',
+        summary: project.summary || '',
+        updated_at: new Date().toISOString()
+    };
+    const existingIndex = normalized.active_projects.findIndex(p => p.name === project.name);
+    if (existingIndex >= 0) normalized.active_projects[existingIndex] = { ...normalized.active_projects[existingIndex], ...nextProject };
+    else normalized.active_projects.push(nextProject);
+    normalized.active_projects = normalized.active_projects.slice(-20);
+    return normalized;
+}
+
+function upsertIntegration(memory, integration) {
+    const normalized = normalizeAugustCoreMemory(memory);
+    normalized.integrations[integration.name] = {
+        status: integration.status || '',
+        summary: integration.summary || '',
+        updated_at: new Date().toISOString()
+    };
+    return normalized;
+}
+
+function appendRecentEvent(memory, event) {
+    const normalized = normalizeAugustCoreMemory(memory);
+    normalized.recent_events.push({
+        summary: event.summary,
+        timestamp: event.timestamp || new Date().toISOString(),
+        source: event.source || ''
+    });
+    normalized.recent_events = normalized.recent_events.slice(-40);
+    return normalized;
+}
+
+function appendCheckpoint(memory, checkpoint) {
+    const normalized = normalizeAugustCoreMemory(memory);
+    normalized.conversation_checkpoints.push({
+        topic: checkpoint.topic || '',
+        summary: checkpoint.summary,
+        timestamp: checkpoint.timestamp || new Date().toISOString()
+    });
+    normalized.conversation_checkpoints = normalized.conversation_checkpoints.slice(-20);
+    return normalized;
 }
 
 const AUGUST_TOOLS = [
@@ -119,6 +240,84 @@ const AUGUST_TOOLS = [
                     }
                 },
                 required: ['command']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'august__remember_project',
+            description: 'Upserts an active project in August\'s shared brain so the same project context carries across devices and sessions.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    name: { type: 'string', description: 'Project name.' },
+                    status: { type: 'string', description: 'Current project status.' },
+                    summary: { type: 'string', description: 'Short description of the project and current focus.' }
+                },
+                required: ['name', 'summary']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'august__remember_integration',
+            description: 'Upserts an integration state in August\'s shared brain, such as Claude Desktop, browser tools, phone access, or APIs.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    name: { type: 'string', description: 'Integration name.' },
+                    status: { type: 'string', description: 'Current status of the integration.' },
+                    summary: { type: 'string', description: 'Important notes about how the integration behaves.' }
+                },
+                required: ['name', 'summary']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'august__search_past_conversations',
+            description: 'Searches the infinite memory vector database for past conversations. Use this when the user asks about something you discussed weeks or months ago that is no longer in your immediate memory. The search uses semantic similarity, so search queries should be full sentences or detailed phrases.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    query: { type: 'string', description: 'The semantic query to search for.' }
+                },
+                required: ['query']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'august__remember_event',
+            description: 'Adds an important recent event to August\'s shared brain so future sessions remember what happened.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    summary: { type: 'string', description: 'What happened and why it matters.' },
+                    source: { type: 'string', description: 'Where this event came from, such as claude-desktop or proxy.' },
+                    timestamp: { type: 'string', description: 'Optional ISO timestamp; defaults to now.' }
+                },
+                required: ['summary']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'august__remember_checkpoint',
+            description: 'Stores a durable conversation checkpoint so the same assistant identity can resume later across devices.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    topic: { type: 'string', description: 'Short topic or conversation area.' },
+                    summary: { type: 'string', description: 'What should be remembered for resuming later.' },
+                    timestamp: { type: 'string', description: 'Optional ISO timestamp; defaults to now.' }
+                },
+                required: ['summary']
             }
         }
     },
@@ -312,6 +511,83 @@ async function executeAugustToolCall(toolName, args) {
                 writeAugustCoreMemory(replaceMem);
                 return `Successfully replaced ${args.section} memory.`;
 
+            case 'august__remember_project': {
+                const nextMemory = upsertProject(readAugustCoreMemory(), args);
+                writeAugustCoreMemory(nextMemory);
+                return `Successfully updated project memory for ${args.name}.`;
+            }
+
+            case 'august__remember_integration': {
+                const nextMemory = upsertIntegration(readAugustCoreMemory(), args);
+                writeAugustCoreMemory(nextMemory);
+                return `Successfully updated integration memory for ${args.name}.`;
+            }
+
+            case 'august__remember_event': {
+                const nextMemory = appendRecentEvent(readAugustCoreMemory(), args);
+                writeAugustCoreMemory(nextMemory);
+                return `Successfully recorded recent event.`;
+            }
+
+            case 'august__remember_checkpoint': {
+                const nextMemory = appendCheckpoint(readAugustCoreMemory(), args);
+                writeAugustCoreMemory(nextMemory);
+                return `Successfully recorded recent conversation checkpoint.`;
+            }
+
+            case 'august__search_past_conversations': {
+                const { getProfile } = require('./config');
+                const cfg = getProfile('claude'); // Fallback to claude profile for embeddings
+                
+                let embeddingsUrl = cfg.targetUrl;
+                if (embeddingsUrl.includes('/anthropic')) {
+                    embeddingsUrl = embeddingsUrl.replace('/anthropic/v1/messages', '/v1/embeddings').replace('/anthropic', '/v1/embeddings');
+                } else if (embeddingsUrl.includes('/v1/')) {
+                    embeddingsUrl = embeddingsUrl.substring(0, embeddingsUrl.indexOf('/v1/') + 4) + 'embeddings';
+                } else {
+                    return `Error: Could not determine embeddings API endpoint from proxy configuration.`;
+                }
+
+                const embedHeaders = { 'Content-Type': 'application/json' };
+                if (cfg.apiKey) {
+                    embedHeaders['Authorization'] = `Bearer ${cfg.apiKey}`;
+                    embedHeaders['x-api-key'] = cfg.apiKey;
+                }
+                const embedModel = cfg.embeddingModel || (embeddingsUrl.includes('minimax') ? 'embo-01' : 'text-embedding-3-small');
+
+                const embedResponse = await fetch(embeddingsUrl, {
+                    method: 'POST',
+                    headers: embedHeaders,
+                    body: JSON.stringify({
+                        model: embedModel,
+                        input: args.query
+                    }),
+                    signal: AbortSignal.timeout(10000)
+                });
+
+                if (!embedResponse.ok) {
+                    return `Error: Failed to generate query embedding. Upstream returned ${embedResponse.status}.`;
+                }
+
+                const embedData = await embedResponse.json();
+                const vector = embedData.data?.[0]?.embedding;
+                
+                if (!vector || !Array.isArray(vector)) {
+                    return `Error: Invalid embedding returned from upstream.`;
+                }
+
+                const { searchCheckpoints } = require('./vector-db');
+                const results = searchCheckpoints(vector, 3);
+                
+                if (results.length === 0) {
+                    return `No past conversations found matching the query.`;
+                }
+
+                return `[Infinite Memory Database Results]\n\n` + results.map(r => 
+                    `Date: ${r.timestamp}\nTopic: ${r.topic}\nSummary: ${r.summary}\nRelevance: ${(r.score * 100).toFixed(1)}%`
+                ).join('\n\n---\n\n');
+            }
+
             case 'august__spawn_background_task': {
                 // ── Permission check ──
                 const pathViolation = checkCommandPaths(args.script_content);
@@ -357,5 +633,7 @@ module.exports = {
     getAugustToolDefinitions,
     isAugustToolName,
     executeAugustToolCall,
-    readAugustCoreMemory
+    readAugustCoreMemory,
+    writeAugustCoreMemory,
+    renderAugustCoreMemory
 };

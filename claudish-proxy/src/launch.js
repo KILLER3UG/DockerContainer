@@ -4,7 +4,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const { saveProfile, getProfile } = require('./utils/config');
 
-const PROXY_URL = 'http://localhost:8085';
+const PROXY_URL = process.env.CLAUDISH_PROXY_URL || 'http://127.0.0.1:8085';
 const IS_TTY = process.stdin.isTTY;
 const CLAUDE_CLIENT_MODEL_ALIAS = process.env.CLAUDISH_CLAUDE_ALIAS || 'claude-opus-4-6';
 const CODEX_CLIENT_MODEL_ALIAS = 'gpt-4o';
