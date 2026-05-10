@@ -5,9 +5,12 @@ const { getModelContextWindow, saveModelContextWindow, loadModelContextWindow } 
 const { estimateTokens, formatTokenCount } = require('../../src/utils/tokens');
 const { buildFriendlyRateLimitMessage, getRetryDelayMs, isRetryableStatus } = require('../../src/utils/upstream');
 const { getMcpToolDefinitions, isMcpToolName, executeMcpToolCall } = require('../../src/utils/mcp-client');
-const { getAugustToolDefinitions, isAugustToolName, executeAugustToolCall, readAugustCoreMemory, renderAugustCoreMemory } = require('../../src/utils/august-tools');
+const { getAugustToolDefinitions, isAugustToolName, executeAugustToolCall } = require('../../src/utils/august-tools');
+const { getCoworkToolDefinitions, isCoworkToolName, executeCoworkToolCall } = require('../../src/utils/cowork-tools');
 const { executeManagedWebTool } = require('../../src/utils/local-web');
 const { validateToolArguments, buildValidationErrorToolMessage } = require('../../src/utils/validator');
+const { LlmAdapterBase } = require('../../src/adapters/base');
+const { buildSystemBlocks: buildContextSystemBlocks } = require('../../src/utils/context-builder');
 
 const CLAUDE_PUBLIC_MODEL_ALIAS = 'claude-opus-4-6';
 const KNOWN_CLAUDE_PUBLIC_MODEL_ALIASES = new Set([
@@ -17,10 +20,7 @@ const KNOWN_CLAUDE_PUBLIC_MODEL_ALIASES = new Set([
     'claude-opus-4-6',
     'claude-sonnet-4-6'
 ]);
-const DEFAULT_MINIMAX_TEMPERATURE = 1;
-const DEFAULT_MINIMAX_TOP_P = 0.95;
-const DEFAULT_MINIMAX_TOP_K = 40;
-const DEFAULT_MINIMAX_MAX_TOKENS = 65536;
+const adapterBase = new LlmAdapterBase({ profileName: 'claude', logPrefix: 'Anthropic' });
 const MANAGED_WEB_TOOL_NAMES = new Set([
     'WebSearch',
     'WebFetch',
@@ -31,37 +31,7 @@ const MANAGED_WEB_TOOL_NAMES = new Set([
 ]);
 
 function isMiniMaxModel(model) {
-    if (typeof model === 'string' && model.toLowerCase().includes('minimax')) {
-        return true;
-    }
-    return false;
-}
-
-function resolvePreferredTemperature(requestedTemperature, model) {
-    if (requestedTemperature !== undefined) return requestedTemperature;
-    if (isMiniMaxModel(model)) return DEFAULT_MINIMAX_TEMPERATURE;
-    return undefined;
-}
-
-function resolvePreferredTopP(requestedTopP, model) {
-    if (requestedTopP !== undefined) return requestedTopP;
-    if (isMiniMaxModel(model)) return DEFAULT_MINIMAX_TOP_P;
-    return undefined;
-}
-
-function resolvePreferredTopK(requestedTopK, model, isAnthropicPath) {
-    // top_k is NOT supported on the MiniMax Anthropic-compatible endpoint.
-    // Sending it causes parameter validation issues. Strip it on Anthropic paths.
-    if (isAnthropicPath && isMiniMaxModel(model)) return undefined;
-    if (requestedTopK !== undefined) return requestedTopK;
-    if (isMiniMaxModel(model)) return DEFAULT_MINIMAX_TOP_K;
-    return undefined;
-}
-
-function resolvePreferredMaxTokens(requestedMaxTokens, model) {
-    if (requestedMaxTokens !== undefined) return requestedMaxTokens;
-    if (isMiniMaxModel(model)) return DEFAULT_MINIMAX_MAX_TOKENS;
-    return undefined;
+    return adapterBase.isMiniMaxModel(model);
 }
 
 function resolveClaudePublicModelAlias(requestedModel) {
@@ -172,36 +142,6 @@ function buildAnthropicSystemBlocks(system) {
     }
     return blocks;
 }
-
-// ── M2.7 Coding Contract System Prompt ──
-// Injected at the TOP of the system prompt for all MiniMax-targeted requests.
-// Based on MiniMax's self-evolution training methodology: the model was trained
-// to respond to structured workflows with EXPLORE->PLAN->IMPLEMENT->VERIFY loops.
-const MINIMAX_M2_7_CODING_CONTRACT = `You are an expert coding agent operating in Windows PowerShell.
-
-For MiniMax M2.7, follow a disciplined high-quality workflow:
-1. Explore the relevant files and constraints before editing.
-2. Make a short concrete plan with the files or subsystems that will change.
-3. Implement the smallest correct change first, then iterate if needed.
-4. Verify with commands, tests, or observable checks whenever possible.
-5. Continue the same reasoning chain across tool rounds instead of restarting from scratch.
-
-Quality rules:
-- Be explicit about assumptions, edge cases, and expected behavior.
-- Prefer precise, high-signal outputs over filler.
-- Do not invent file paths, package names, or command results; inspect first.
-- Use PowerShell and Windows paths in this environment.
-- If WebSearch or WebFetch is available, use it for public internet access instead of claiming browsing is blocked.
-- If WebSearch is not visibly available but mcp__workspace__web_fetch is available, use mcp__workspace__web_fetch to perform web research by fetching public search endpoints or known documentation URLs.
-- For search via fetch, prefer:
-  1. https://api.duckduckgo.com/?q=<QUERY>&format=json&no_redirect=1
-  2. a provider's public docs or homepage URL directly
-  3. follow-up fetches on promising public result URLs
-- Do not tell the user "I have no web search tool" if a public web fetch tool is available. Use the fetch-based workflow instead.
-- Never combine WebSearch/WebFetch with any other tool in the same assistant turn. Use web tools in a dedicated turn, then continue with other tools after the result comes back.
-- After a web fetch or web search tool returns content, summarize that result directly. Do not switch to august__bash or browser tools just to refetch the same public page.
-- For long tasks, make full use of the available context window without wasting tokens on repetitive boilerplate.
-- If you need mutating proxy tools, establish or update plan.md before attempting code changes so the proxy gate will allow execution.`;
 
 function isManagedWebToolName(name) {
     return typeof name === 'string' && MANAGED_WEB_TOOL_NAMES.has(name);
@@ -380,6 +320,97 @@ function getCanonicalManagedAnthropicWebTools() {
     );
 }
 
+function openAiToAnthropicToolDefinition(tool) {
+    if (tool && tool.type === 'function') {
+        return {
+            name: tool.function.name,
+            description: tool.function.description || '',
+            input_schema: tool.function.parameters || { type: 'object', properties: {} }
+        };
+    }
+    return tool;
+}
+
+function anthropicToOpenAiToolDefinition(tool) {
+    return {
+        type: 'function',
+        function: {
+            name: tool.name,
+            description: tool.description || '',
+            parameters: tool.input_schema || { type: 'object', properties: {} },
+            strict: tool.strict
+        }
+    };
+}
+
+function getCanonicalCoworkAnthropicTools() {
+    return getCoworkToolDefinitions().map(openAiToAnthropicToolDefinition);
+}
+
+function getCanonicalManagedOpenAiWebTools() {
+    return getCanonicalManagedAnthropicWebTools().map(anthropicToOpenAiToolDefinition);
+}
+
+function getProxyOpenAiToolDefinitions() {
+    return [
+        ...getMcpToolDefinitions(),
+        ...getCoworkToolDefinitions(),
+        ...getAugustToolDefinitions(),
+        ...getCanonicalManagedOpenAiWebTools()
+    ];
+}
+
+function getToolDefinitionName(tool) {
+    return tool?.function?.name || tool?.name || '';
+}
+
+function appendMissingAnthropicTools(targetTools, extraTools) {
+    const seen = new Set((targetTools || []).map(getToolDefinitionName).filter(Boolean));
+    const appended = [];
+    for (const tool of extraTools || []) {
+        const name = getToolDefinitionName(tool);
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        targetTools.push(tool);
+        appended.push(name);
+    }
+    return appended;
+}
+
+function appendMissingOpenAiTools(targetTools, extraTools) {
+    const seen = new Set((targetTools || []).map(getToolDefinitionName).filter(Boolean));
+    const appended = [];
+    for (const tool of extraTools || []) {
+        const name = getToolDefinitionName(tool);
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        targetTools.push(tool);
+        appended.push(name);
+    }
+    return appended;
+}
+
+function isProxyManagedLocalToolName(name) {
+    return (
+        isManagedWebToolName(name) ||
+        isCoworkToolName(name) ||
+        isAugustToolName(name) ||
+        isMcpToolName(name)
+    );
+}
+
+function rememberManagedLocalToolDefinitions(tools, ctx) {
+    if (!ctx?.managedLocalToolNames) return [];
+    const names = [];
+    for (const tool of tools || []) {
+        const name = getToolDefinitionName(tool);
+        if (!isProxyManagedLocalToolName(name)) continue;
+        ctx.managedLocalToolNames.add(name);
+        names.push(name);
+    }
+    return names;
+}
+
 async function executeManagedProxyTool(toolName, args) {
     if (isManagedWebToolName(toolName)) {
         const localName = (
@@ -389,6 +420,10 @@ async function executeManagedProxyTool(toolName, args) {
         ) ? 'web_search' : 'web_fetch';
         logActivity('WEB', `${toolName} executed locally`);
         return executeManagedWebTool(localName, args || {});
+    }
+    if (isCoworkToolName(toolName)) {
+        logActivity('COWORK', `${toolName} executed by proxy compatibility layer`);
+        return executeCoworkToolCall(toolName, args || {});
     }
     if (isAugustToolName(toolName)) {
         logActivity('AUGUST', `${toolName} executed locally`);
@@ -400,40 +435,18 @@ async function executeManagedProxyTool(toolName, args) {
     throw new Error(`Unsupported managed proxy tool: ${toolName}`);
 }
 
-function buildMinimaxAwareSystem(system, targetUrl) {
-    const memory = readAugustCoreMemory();
-    const renderedMemory = renderAugustCoreMemory(memory);
-    const coreMemoryBlock = `[AUGUST GLOBAL BRAIN - ALWAYS ACTIVE]
-<user_profile>
-${renderedMemory.user_profile}
-</user_profile>
-<global_context>
-${renderedMemory.global_context}
-</global_context>
-<active_projects>
-${renderedMemory.active_projects}
-</active_projects>
-<integrations>
-${renderedMemory.integrations}
-</integrations>
-<recent_events>
-${renderedMemory.recent_events}
-</recent_events>
-<conversation_checkpoints>
-${renderedMemory.conversation_checkpoints}
-</conversation_checkpoints>
-You can update these sections using august__core_memory_append or august__core_memory_replace.`;
-
-    const originalText = systemBlocksToText(system);
-    let combined = coreMemoryBlock + '\n\n---\n\n' + originalText;
-
-    if (targetUrl && targetUrl.toLowerCase().includes('minimax')) {
-        combined = MINIMAX_M2_7_CODING_CONTRACT + '\n\n---\n\n' + combined;
-    }
-    
-    const totalChars = combined.length;
+function buildMinimaxAwareSystem(system, targetUrl, model) {
+    const backendHint = isMiniMaxModel(model) || (targetUrl && targetUrl.toLowerCase().includes('minimax'))
+        ? 'MiniMax-M2.7'
+        : model;
+    const blocks = buildContextSystemBlocks(system, {
+        model: backendHint,
+        targetUrl,
+        includeWindowsContext: false
+    });
+    const totalChars = blocks.reduce((sum, block) => sum + (block.text || '').length, 0);
     console.log(`[Proxy System Prompt]: August core injected. Total system prompt length=${totalChars} chars`);
-    return [{ type: 'text', text: combined }];
+    return blocks;
 }
 
 function buildClientToolGuidance(clientTools) {
@@ -446,6 +459,7 @@ function buildClientToolGuidance(clientTools) {
     const webLike = visibleNames.filter(name =>
         /web[_-]?fetch|web[_-]?search|fetch/i.test(name)
     );
+    const coworkLike = visibleNames.filter(name => isCoworkToolName(name));
 
     const lines = [
         '[CLIENT TOOL INVENTORY]',
@@ -457,6 +471,12 @@ function buildClientToolGuidance(clientTools) {
         lines.push('If one of those visible web-fetch tools fails or is blocked, retry the research using the same compatible web-fetch/search name that remains available in the tool list instead of saying browsing is unavailable.');
         lines.push('Do not switch to browser automation for ordinary public web research while a compatible web fetch/search tool is available.');
         lines.push('Once a compatible web fetch/search tool returns content, summarize that content directly instead of switching to august__bash or another refetch tool.');
+    }
+
+    if (coworkLike.length > 0) {
+        lines.push(`Cowork compatibility tools are available through the proxy: ${coworkLike.join(', ')}.`);
+        lines.push('If a Cowork server is reported as unavailable by older client context, still use the visible mcp__cowork__* tool names because Claudish Proxy resolves them locally.');
+        lines.push('For Cowork delete-permission calls, remember the compatibility layer only checks safe roots and never deletes files by itself.');
     }
 
     return lines.join('\n');
@@ -640,66 +660,7 @@ async function repairManagedWebToolResults(anthropicMessages) {
 
 // ── Parse SSE stream into a complete Chat Completions JSON object ──
 function parseSSEToJSON(sseText) {
-    const lines = sseText.split('\n');
-    let fullContent = '';
-    let fullReasoning = '';
-    const toolCalls = [];
-    let finishReason = 'stop';
-    let model = '';
-    let id = '';
-    let usage = null;
-
-    for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const jsonStr = line.slice(6).trim();
-        if (jsonStr === '[DONE]') continue;
-        try {
-            const chunk = JSON.parse(jsonStr);
-            if (chunk.id) id = chunk.id;
-            if (chunk.model) model = chunk.model;
-            if (chunk.usage) usage = chunk.usage;
-            const delta = chunk.choices?.[0]?.delta;
-            if (delta) {
-                if (delta.content) fullContent += delta.content;
-                if (delta.reasoning) fullReasoning += delta.reasoning;
-                if (delta.reasoning_content) fullReasoning += delta.reasoning_content;
-                if (delta.tool_calls) {
-                    delta.tool_calls.forEach(tc => {
-                        const existing = toolCalls.find(t => t.index === tc.index);
-                        if (existing) {
-                            if (tc.function?.name) existing.function.name += tc.function.name;
-                            if (tc.function?.arguments) existing.function.arguments += tc.function.arguments;
-                        } else {
-                            toolCalls.push({ ...tc, function: { name: tc.function?.name || '', arguments: tc.function?.arguments || '' } });
-                        }
-                    });
-                }
-                const fr = chunk.choices[0].finish_reason;
-                if (fr !== null && fr !== undefined) finishReason = fr;
-            }
-        } catch (e) { /* ignore parse errors */ }
-    }
-
-    const normalizedToolCalls = toolCalls.map(tc => ({
-        id: tc.id || 'call_' + Math.random().toString(36).substr(2, 9),
-        type: 'function',
-        function: { name: tc.function.name, arguments: tc.function.arguments }
-    }));
-
-    const message = { role: 'assistant', content: fullContent };
-    if (fullReasoning) message.reasoning = fullReasoning;
-    if (normalizedToolCalls.length > 0) message.tool_calls = normalizedToolCalls;
-
-    const result = {
-        id: id || 'chatcmpl-' + Math.random().toString(36).substr(2, 9),
-        object: 'chat.completion',
-        created: Math.floor(Date.now() / 1000),
-        model: model || 'unknown',
-        choices: [{ index: 0, message, finish_reason: finishReason }],
-        usage: usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
-    };
-    console.log(`[Proxy SSE Parse]: content_len=${fullContent.length}, reasoning_len=${fullReasoning.length}, tools=${normalizedToolCalls.length}, finish_reason=${finishReason}`);
-    return result;
+    return adapterBase.parseOpenAIChatSSE(sseText);
 }
 
 // ── Parse native Anthropic SSE stream into a complete Anthropic JSON object ──
@@ -813,6 +774,14 @@ function translateTools(anthropicTools, ctx) {
             }
         };
     });
+    const injected = appendMissingOpenAiTools(translated, [
+        ...getCoworkToolDefinitions(),
+        ...getCanonicalManagedOpenAiWebTools()
+    ]);
+    if (injected.length > 0) {
+        console.log('[Proxy Tools]: Injected OpenAI-compatible proxy tools:', injected);
+    }
+    rememberManagedLocalToolDefinitions(translated, ctx);
     ctx.lastKnownTools = translated;
     return translated;
 }
@@ -920,9 +889,7 @@ async function resolveManagedWebToolCalls(initialData, oReq, cfg) {
         if (toolCalls.length === 0) return data;
 
         const managedToolCalls = toolCalls.filter(tc =>
-            isMcpToolName(tc?.function?.name) ||
-            isAugustToolName(tc?.function?.name) ||
-            isManagedWebToolName(tc?.function?.name)
+            isProxyManagedLocalToolName(tc?.function?.name)
         );
         if (managedToolCalls.length === 0) return data;
 
@@ -1096,9 +1063,7 @@ async function buildOpenAIRequest(aReq, ctx, cfg) {
     const backendModel = getClaudeBackendModel(cfg, aReq.model);
 
     // System prompt
-    const effectiveSystem = isMiniMaxModel(backendModel)
-        ? buildMinimaxAwareSystem(aReq.system, cfg.targetUrl)
-        : aReq.system;
+    const effectiveSystem = buildMinimaxAwareSystem(aReq.system, cfg.targetUrl, backendModel);
     const systemPrompt = buildOpenAISystemPrompt(effectiveSystem);
     openaiMessages.push({ role: 'system', content: systemPrompt });
 
@@ -1139,18 +1104,18 @@ async function buildOpenAIRequest(aReq, ctx, cfg) {
     // For MiniMax M2.7, use output-token-aware threshold because it has a COMBINED
     // input+output budget (not separate pools like most models).
     // Formula: contextWindow - max_tokens_reserve - thinking_reserve - safety_buffer
-    let threshold;
-    if (isMiniMaxModel(requestModel)) {
-        const outputReserve = aReq.max_tokens || 8192;
-        const thinkingReserve = 4096; // thinking blocks also consume from the combined budget
-        const safetyBuffer = 2000;
-        threshold = contextWindow - outputReserve - thinkingReserve - safetyBuffer;
-        console.log(`[Proxy Context]: MiniMax combined-budget threshold: ${formatTokenCount(threshold)} (${formatTokenCount(contextWindow)} - ${formatTokenCount(outputReserve)} output - ${formatTokenCount(thinkingReserve)} thinking - ${formatTokenCount(safetyBuffer)} safety)`);
-    } else {
-        threshold = Math.floor(contextWindow * 0.88); // 88% threshold for standard models
-    }
+    const threshold = adapterBase.getCompactionThreshold(contextWindow, {
+        model: requestModel,
+        requestedMaxTokens: aReq.max_tokens
+    });
     const estimatedTokens = estimateTokens(openaiMessages, aReq.tools);
-    console.log(`[Proxy Context]: model=${requestModel}, window=${formatTokenCount(contextWindow)}, estimated=${formatTokenCount(estimatedTokens)}, threshold=${formatTokenCount(threshold)}`);
+    adapterBase.logContextBudget({
+        model: requestModel,
+        contextWindow,
+        estimatedTokens,
+        threshold,
+        requestedMaxTokens: aReq.max_tokens
+    });
 
     if (estimatedTokens > threshold) {
         console.log(`[Proxy Compaction]: ${formatTokenCount(estimatedTokens)} tokens exceeds ${formatTokenCount(threshold)} threshold. Compacting...`);
@@ -1181,22 +1146,15 @@ async function buildOpenAIRequest(aReq, ctx, cfg) {
         logActivity('COMPACT', `Claude: ${formatTokenCount(estimatedTokens)} -> ${formatTokenCount(estimateTokens(openaiMessages, aReq.tools))} tokens (${formatTokenCount(contextWindow)} window)`);
     }
 
-    const preferredMaxTokens = resolvePreferredMaxTokens(aReq.max_tokens, backendModel);
     const oReq = {
         model: backendModel,
         messages: sanitizeMessagesForOpenAIUpstream(openaiMessages, backendModel)
     };
 
-    // Pass through standard generation parameters without enforcing a proxy-side max_tokens cap.
-    if (preferredMaxTokens !== undefined) oReq.max_tokens = preferredMaxTokens;
-    const preferredTemperature = resolvePreferredTemperature(aReq.temperature, backendModel);
-    const preferredTopP = resolvePreferredTopP(aReq.top_p, backendModel);
-    const isOpenAIPath = !shouldUseAnthropicUpstream(cfg.targetUrl);
-    const preferredTopK = resolvePreferredTopK(aReq.top_k, backendModel, !isOpenAIPath);
-    if (preferredTemperature !== undefined) oReq.temperature = preferredTemperature;
-    if (preferredTopP !== undefined) oReq.top_p = preferredTopP;
-    if (preferredTopK !== undefined) oReq.top_k = preferredTopK;
-    if (isMiniMaxModel(backendModel)) oReq.reasoning_split = true;
+    adapterBase.applyGenerationDefaults(oReq, aReq, {
+        model: backendModel,
+        isAnthropicPath: false
+    });
     if (aReq.stop_sequences) oReq.stop = aReq.stop_sequences;
 
     console.log(`[Proxy Params]: max_tokens=${oReq.max_tokens}, msg_count=${openaiMessages.length}, temp=${oReq.temperature}, top_p=${oReq.top_p}, top_k=${oReq.top_k}`);
@@ -1219,6 +1177,11 @@ async function buildOpenAIRequest(aReq, ctx, cfg) {
     } else if (hasToolMessages && ctx.lastKnownTools.length > 0) {
         console.log('[Proxy Tools]: Reusing cached tools for tool-result turn');
         oReq.tools = ctx.lastKnownTools;
+        rememberManagedLocalToolDefinitions(oReq.tools, ctx);
+    } else {
+        oReq.tools = getProxyOpenAiToolDefinitions();
+        rememberManagedLocalToolDefinitions(oReq.tools, ctx);
+        console.log('[Proxy Tools]: Injected default OpenAI-compatible MCP/August/Cowork/web tools');
     }
 
     return oReq;
@@ -1255,7 +1218,7 @@ function buildAnthropicUpstreamRequest(aReq, cfg, upstreamModelOverride) {
     };
 
     // Inject the M2.7 coding contract for MiniMax targets; pass through unchanged for others
-    upstreamReq.system = buildMinimaxAwareSystem(aReq.system, cfg.targetUrl);
+    upstreamReq.system = buildMinimaxAwareSystem(aReq.system, cfg.targetUrl, upstreamReq.model);
 
     // Mid-session drift prevention: inject a rule reminder every 10 tool-result turns
     if (isMiniMaxModel(upstreamReq.model) && shouldInjectReminderMessage(upstreamReq.messages)) {
@@ -1269,45 +1232,30 @@ function buildAnthropicUpstreamRequest(aReq, cfg, upstreamModelOverride) {
     }
 
     const backendModel = upstreamModelOverride || getClaudeBackendModel(cfg, aReq.model);
-    const preferredMaxTokens = resolvePreferredMaxTokens(aReq.max_tokens, backendModel);
-    const preferredTemperature = resolvePreferredTemperature(aReq.temperature, backendModel);
-    const preferredTopP = resolvePreferredTopP(aReq.top_p, backendModel);
-    // isAnthropicPath=true here since buildAnthropicUpstreamRequest always targets Anthropic endpoint
-    const preferredTopK = resolvePreferredTopK(aReq.top_k, backendModel, true);
-    if (preferredMaxTokens !== undefined) upstreamReq.max_tokens = preferredMaxTokens;
-    if (preferredTemperature !== undefined) upstreamReq.temperature = preferredTemperature;
-    if (preferredTopP !== undefined) upstreamReq.top_p = preferredTopP;
-    if (preferredTopK !== undefined) upstreamReq.top_k = preferredTopK;
+    adapterBase.applyGenerationDefaults(upstreamReq, aReq, {
+        model: backendModel,
+        isAnthropicPath: true
+    });
     if (aReq.thinking !== undefined) upstreamReq.thinking = aReq.thinking;
     if (aReq.stop_sequences) upstreamReq.stop_sequences = aReq.stop_sequences;
-    const openAiToAnthropicTool = (tool) => {
-        if (tool && tool.type === 'function') {
-            return {
-                name: tool.function.name,
-                description: tool.function.description || '',
-                input_schema: tool.function.parameters || { type: 'object', properties: {} }
-            };
-        }
-        return tool;
-    };
-
     if (aReq.tools && aReq.tools.length > 0) {
         // Smart client (e.g. Claude Desktop). Copy client tools, then strip browser-automation
         // tools and inject local web tools so the proxy can intercept them regardless of provider.
         upstreamReq.tools = dedupeAndCanonicalizeAnthropicTools(aReq.tools);
-        const existingNames = new Set(upstreamReq.tools.map(t => t?.name).filter(Boolean));
-        const missingWebTools = getCanonicalManagedAnthropicWebTools()
-            .filter(tool => !existingNames.has(tool.name));
-        if (missingWebTools.length > 0) {
-            upstreamReq.tools.push(...missingWebTools);
-            console.log('[Proxy] Injected managed web tools for all providers:', missingWebTools.map(t => t.name));
+        const injectedTools = appendMissingAnthropicTools(upstreamReq.tools, [
+            ...getCanonicalManagedAnthropicWebTools(),
+            ...getCanonicalCoworkAnthropicTools()
+        ]);
+        if (injectedTools.length > 0) {
+            console.log('[Proxy] Injected managed compatibility tools for all providers:', injectedTools);
         }
     } else {
-        // Dumb client (e.g. Mobile App). Inject MCP + August + web tools — always.
-        const mappedMcpTools = getMcpToolDefinitions().map(openAiToAnthropicTool);
-        const mappedAugustTools = getAugustToolDefinitions().map(openAiToAnthropicTool);
+        // Dumb client (e.g. Mobile App). Inject MCP + Cowork + August + web tools -- always.
+        const mappedMcpTools = getMcpToolDefinitions().map(openAiToAnthropicToolDefinition);
+        const mappedCoworkTools = getCanonicalCoworkAnthropicTools();
+        const mappedAugustTools = getAugustToolDefinitions().map(openAiToAnthropicToolDefinition);
         const mappedWebTools = getCanonicalManagedAnthropicWebTools();
-        upstreamReq.tools = [ ...mappedMcpTools, ...mappedAugustTools, ...mappedWebTools ];
+        upstreamReq.tools = [ ...mappedMcpTools, ...mappedCoworkTools, ...mappedAugustTools, ...mappedWebTools ];
     }
     if (aReq.tool_choice) upstreamReq.tool_choice = aReq.tool_choice;
     if (aReq.metadata) upstreamReq.metadata = aReq.metadata;
@@ -1469,9 +1417,7 @@ async function resolveManagedAnthropicToolUses(initialParsed, upstreamReq, cfg) 
         if (toolUses.length === 0) return parsed;
 
         const managedToolUses = toolUses.filter(toolUse =>
-            isMcpToolName(toolUse?.name) ||
-            isAugustToolName(toolUse?.name) ||
-            isManagedWebToolName(toolUse?.name)
+            isProxyManagedLocalToolName(toolUse?.name)
         );
         if (managedToolUses.length === 0) return parsed;
 
@@ -1796,13 +1742,12 @@ async function handleMessages(req, res, cleanPath, reqId) {
                 const ctx = { managedLocalToolNames: new Set() };
                 let upstreamReq = buildAnthropicUpstreamRequest(aReq, cfg, upstreamModel);
                 
-                // Mark ALL managed web tools for local resolution — no provider guard.
-                // Previously only activated on minimax.io which meant Claude Desktop and
-                // all other providers silently skipped the local web tool loop.
-                const webTools = upstreamReq.tools?.filter(t => isManagedWebToolName(t?.name)) || [];
-                if (webTools.length > 0) {
-                    console.log('[Proxy] Marking web tools for local resolution:', webTools.map(t => t.name));
-                    webTools.forEach(t => ctx.managedLocalToolNames.add(t.name));
+                // Mark all proxy-managed tools for local resolution -- no provider guard.
+                // This covers web, Cowork compatibility, August memory, and running MCP servers.
+                const localTools = upstreamReq.tools?.filter(t => isProxyManagedLocalToolName(t?.name)) || [];
+                if (localTools.length > 0) {
+                    console.log('[Proxy] Marking proxy-managed tools for local resolution:', localTools.map(t => t.name));
+                    localTools.forEach(t => ctx.managedLocalToolNames.add(t.name));
                 }
                 
                 upstreamReq = normalizeAnthropicToolsForNativeUpstream(upstreamReq, ctx);

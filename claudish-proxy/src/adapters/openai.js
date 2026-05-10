@@ -4,70 +4,14 @@ const { applySelfHealToMessages } = require('../../src/utils/selfheal');
 const { getModelContextWindow, saveModelContextWindow, loadModelContextWindow } = require('../../src/utils/models');
 const { estimateTokens, formatTokenCount } = require('../../src/utils/tokens');
 const { buildFriendlyRateLimitMessage, getRetryDelayMs, isRetryableStatus } = require('../../src/utils/upstream');
+const { LlmAdapterBase } = require('../../src/adapters/base');
+const { buildSystemPromptText } = require('../../src/utils/context-builder');
+
+const adapterBase = new LlmAdapterBase({ profileName: 'codex', logPrefix: 'OpenAI' });
 
 // ── Parse SSE stream into a complete Chat Completions JSON object ──
 function parseSSEToJSON(sseText) {
-    const lines = sseText.split('\n');
-    let fullContent = '';
-    let fullReasoning = '';
-    const toolCalls = [];
-    let finishReason = 'stop';
-    let model = '';
-    let id = '';
-    let usage = null;
-
-    for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const jsonStr = line.slice(6).trim();
-        if (jsonStr === '[DONE]') continue;
-        try {
-            const chunk = JSON.parse(jsonStr);
-            if (chunk.id) id = chunk.id;
-            if (chunk.model) model = chunk.model;
-            if (chunk.usage) usage = chunk.usage;
-            const delta = chunk.choices?.[0]?.delta;
-            if (delta) {
-                if (delta.content) fullContent += delta.content;
-                if (delta.reasoning) fullReasoning += delta.reasoning;
-                if (delta.reasoning_content) fullReasoning += delta.reasoning_content;
-                if (delta.tool_calls) {
-                    delta.tool_calls.forEach(tc => {
-                        const existing = toolCalls.find(t => t.index === tc.index);
-                        if (existing) {
-                            if (tc.function?.name) existing.function.name += tc.function.name;
-                            if (tc.function?.arguments) existing.function.arguments += tc.function.arguments;
-                        } else {
-                            toolCalls.push({ ...tc, function: { name: tc.function?.name || '', arguments: tc.function?.arguments || '' } });
-                        }
-                    });
-                }
-                const fr = chunk.choices[0].finish_reason;
-                if (fr !== null && fr !== undefined) finishReason = fr;
-            }
-        } catch (e) { /* ignore parse errors */ }
-    }
-
-    // Normalize tool_calls: remove index field
-    const normalizedToolCalls = toolCalls.map(tc => ({
-        id: tc.id || 'call_' + Math.random().toString(36).substr(2, 9),
-        type: 'function',
-        function: { name: tc.function.name, arguments: tc.function.arguments }
-    }));
-
-    const message = { role: 'assistant', content: fullContent };
-    if (fullReasoning) message.reasoning = fullReasoning;
-    if (normalizedToolCalls.length > 0) message.tool_calls = normalizedToolCalls;
-
-    const result = {
-        id: id || 'chatcmpl-' + Math.random().toString(36).substr(2, 9),
-        object: 'chat.completion',
-        created: Math.floor(Date.now() / 1000),
-        model: model || 'unknown',
-        choices: [{ index: 0, message, finish_reason: finishReason }],
-        usage: usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
-    };
-    console.log(`[Proxy SSE Parse]: content_len=${fullContent.length}, reasoning_len=${fullReasoning.length}, tools=${normalizedToolCalls.length}, finish_reason=${finishReason}`);
-    return result;
+    return adapterBase.parseOpenAIChatSSE(sseText);
 }
 
 // ── Translate Responses API content parts to plain text ──
@@ -150,14 +94,7 @@ function translateResponsesInput(oReq) {
 }
 
 function extractUsageTokens(usage, contextLabel) {
-    const inputTokens = usage?.prompt_tokens || usage?.input_tokens || 0;
-    const outputTokens = usage?.completion_tokens || usage?.output_tokens || 0;
-    if (!usage) {
-        console.warn(`[Proxy Usage]: ${contextLabel} returned no usage data`);
-    } else if (inputTokens === 0 && outputTokens === 0) {
-        console.warn(`[Proxy Usage]: ${contextLabel} usage payload had zero tokens`);
-    }
-    return { inputTokens, outputTokens };
+    return adapterBase.extractUsageTokens(usage, contextLabel);
 }
 
 // ── Main handler for /v1/chat/completions and /v1/responses ──
@@ -220,45 +157,15 @@ async function handleChatCompletions(req, res, cleanPath, reqId) {
                 oReq.messages = [{ role: 'user', content: 'hi' }];
             }
 
-            // Inject Windows environment system prompt and August Brain Context
-            const { readAugustCoreMemory, renderAugustCoreMemory } = require('../utils/august-tools');
-            const memory = readAugustCoreMemory();
-            const renderedMemory = renderAugustCoreMemory(memory);
-            
-            const augustBrainSystem = `[AUGUST GLOBAL BRAIN - ALWAYS ACTIVE]
-<user_profile>
-${renderedMemory.user_profile}
-</user_profile>
-<global_context>
-${renderedMemory.global_context}
-</global_context>
-<active_projects>
-${renderedMemory.active_projects}
-</active_projects>
-<integrations>
-${renderedMemory.integrations}
-</integrations>
-<recent_events>
-${renderedMemory.recent_events}
-</recent_events>
-<conversation_checkpoints>
-${renderedMemory.conversation_checkpoints}
-</conversation_checkpoints>
-You can update these sections using august__core_memory_append or august__core_memory_replace.`;
-
-            const windowsSystemPrompt = 'ENVIRONMENT: You are running on Windows (PowerShell). Use Windows commands and paths.\n' +
-                '- Use PowerShell syntax (e.g., Get-ChildItem, Select-String, Test-Path) NOT bash (ls, grep, cat).\n' +
-                '- Use backslash paths (C:\\Users\\...) NOT forward slash (/home/...).\n' +
-                '- Use Invoke-WebRequest or curl.exe for HTTP requests.\n' +
-                '- File separators are backslashes. Directory separator is backslash.\n' +
-                '- Do NOT suggest bash, sh, zsh, or WSL commands unless explicitly asked.\n' +
-                '- If you need to run shell commands, use PowerShell syntax.\n\n' +
-                augustBrainSystem;
-            
+            const systemPromptOptions = {
+                model: cfg._upstreamModel || cfg.currentModel,
+                targetUrl: cfg.targetUrl,
+                includeWindowsContext: true
+            };
             const existingSystemIdx = oReq.messages.findIndex(m => m.role === 'system');
             if (existingSystemIdx >= 0) {
                 const existing = oReq.messages[existingSystemIdx].content || '';
-                const combined = windowsSystemPrompt + '\n\n' + existing;
+                const combined = buildSystemPromptText(existing, systemPromptOptions);
                 if (combined.length > 8000) {
                     console.warn(`[Proxy System Prompt]: Codex system prompt is ${combined.length} chars — may be truncated by upstream model.`);
                 } else {
@@ -266,13 +173,15 @@ You can update these sections using august__core_memory_append or august__core_m
                 }
                 oReq.messages[existingSystemIdx].content = combined;
             } else {
+                // Inject the shared Claude-shaped memory hierarchy plus provider instructions.
+                const windowsSystemPrompt = buildSystemPromptText(null, systemPromptOptions);
                 console.log(`[Proxy System Prompt]: Codex system prompt length=${windowsSystemPrompt.length} chars (injected)`);
                 oReq.messages.unshift({ role: 'system', content: windowsSystemPrompt });
             }
 
             // ── Model Resolution (Alias Mapping) ──
             const requestedModel = oReq.model || 'gpt-5.4';
-            let requestModel = cfg._upstreamModel || cfg.currentModel || requestedModel;
+            requestModel = cfg._upstreamModel || cfg.currentModel || requestedModel;
             
             // Handle explicit aliases (just like in Claude profile)
             if (requestedModel === 'gpt-5.4' || requestedModel === 'gpt-4o' || requestedModel === 'gpt-4-turbo') {
@@ -304,9 +213,18 @@ You can update these sections using august__core_memory_append or august__core_m
                 contextWindow = modelInfo.inputTokens;
                 saveModelContextWindow('codex', requestModel, contextWindow);
             }
-            const threshold = Math.floor(contextWindow * 0.88); // 88% threshold
+            const threshold = adapterBase.getCompactionThreshold(contextWindow, {
+                model: requestModel,
+                requestedMaxTokens: oReq.max_output_tokens ?? oReq.max_tokens
+            });
             const estimatedTokens = estimateTokens(oReq.messages, oReq.tools);
-            console.log(`[Proxy Context]: model=${requestModel}, window=${formatTokenCount(contextWindow)}, estimated=${formatTokenCount(estimatedTokens)}, threshold=${formatTokenCount(threshold)}`);
+            adapterBase.logContextBudget({
+                model: requestModel,
+                contextWindow,
+                estimatedTokens,
+                threshold,
+                requestedMaxTokens: oReq.max_output_tokens ?? oReq.max_tokens
+            });
 
             if (estimatedTokens > threshold) {
                 console.log(`[Proxy Compaction]: ${formatTokenCount(estimatedTokens)} tokens exceeds ${formatTokenCount(threshold)} threshold. Compacting...`);
@@ -350,9 +268,11 @@ You can update these sections using august__core_memory_append or august__core_m
             // Free-tier models default to tiny limits (~256 tokens). Ensure a reasonable minimum.
             // This applies to BOTH Responses API and Chat Completions paths.
             const clientMaxTokens = oReq.max_output_tokens !== undefined ? oReq.max_output_tokens : oReq.max_tokens;
-            const effectiveMaxTokens = Math.max(1024, Math.min(clientMaxTokens || 2048, 65536));
+            const preferredMaxTokens = adapterBase.resolvePreferredMaxTokens(clientMaxTokens, requestModel);
+            const effectiveMaxTokens = Math.max(1024, Math.min(preferredMaxTokens || 2048, 64000));
             oReq.max_tokens = effectiveMaxTokens;
             delete oReq.max_output_tokens;
+            adapterBase.applyGenerationDefaults(oReq, oReq, { model: requestModel, isAnthropicPath: false });
 
             if (isResponsesEndpoint) {
                 oReq.stream = false;
@@ -665,7 +585,7 @@ You can update these sections using august__core_memory_append or august__core_m
 
                     // --- AUTO-MEMORY BACKGROUND EXTRACTION ---
                     const { extractAndSaveMemories } = require('../utils/auto-memory');
-                    extractAndSaveMemories(oReq.messages, parsed, cfg, upstreamModel).catch(() => {});
+                    extractAndSaveMemories(oReq.messages, parsed, cfg, requestModel).catch(() => {});
 
                     res.writeHead(200, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify(parsed));
@@ -694,7 +614,7 @@ You can update these sections using august__core_memory_append or august__core_m
 
                     // --- AUTO-MEMORY BACKGROUND EXTRACTION ---
                     const { extractAndSaveMemories } = require('../utils/auto-memory');
-                    extractAndSaveMemories(oReq.messages, parsed, cfg, upstreamModel).catch(() => {});
+                    extractAndSaveMemories(oReq.messages, parsed, cfg, requestModel).catch(() => {});
                 } catch (e) { /* ignore parse errors for passthrough */ }
                 res.writeHead(response.status, { 'Content-Type': 'application/json' });
                 res.end(rawBody);

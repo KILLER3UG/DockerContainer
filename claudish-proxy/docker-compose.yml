@@ -22,6 +22,7 @@ services:
       # Live-mount all source code so changes take effect on container restart (no rebuild needed)
       - ./src:/app/src
       - ./request-log.json:/app/request-log.json
+      - ./host_files:/app/host_files
     ports:
       - "8085:8080"
     extra_hosts:

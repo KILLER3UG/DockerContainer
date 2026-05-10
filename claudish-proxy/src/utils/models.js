@@ -26,11 +26,10 @@ const KNOWN_MODELS = {
   'gemini-2.0-flash-exp-free': { inputTokens: 1048576, outputTokens: 8192 },
 
   // MiniMax M2.7 — combined 204,800 token budget (input + output shared)
-  // Safe input = 204800 - 8192 (output) - 4096 (thinking) - 2000 (safety) = 190512
-  'MiniMax-M2.7':           { inputTokens: 190512, outputTokens: 8192 },
-  'minimax-m2.7':           { inputTokens: 190512, outputTokens: 8192 },
-  'MiniMax-M2.7-highspeed': { inputTokens: 190512, outputTokens: 8192 },
-  'minimax-m2.7-highspeed': { inputTokens: 190512, outputTokens: 8192 },
+  'MiniMax-M2.7':           { inputTokens: 204800, outputTokens: 64000 },
+  'minimax-m2.7':           { inputTokens: 204800, outputTokens: 64000 },
+  'MiniMax-M2.7-highspeed': { inputTokens: 204800, outputTokens: 64000 },
+  'minimax-m2.7-highspeed': { inputTokens: 204800, outputTokens: 64000 },
 
   // Generic fallbacks by family
   'gpt-4o': { inputTokens: 128000, outputTokens: 16384 },
@@ -76,7 +75,7 @@ function inferFromModelId(modelId) {
   if (id.includes('minimax')) {
     // M2.7 has a combined 204,800 token budget — distinct from M2.5's 256k input budget
     if (id.includes('m2.7') || id.includes('m2-7')) {
-      return { inputTokens: 190512, outputTokens: 8192 };
+      return { inputTokens: 204800, outputTokens: 64000 };
     }
     return { inputTokens: 245760, outputTokens: 8192 }; // M2.5 and earlier
   }
@@ -198,6 +197,11 @@ function loadModelContextWindow(profileName, modelId) {
     const config = getConfig();
     const profile = config[profileName];
     if (profile && profile.contextModelId === modelId && profile.contextWindow) {
+      const inferred = inferFromModelId(modelId);
+      if (inferred && Number(profile.contextWindow) !== inferred.inputTokens) {
+        console.log(`[Proxy Models]: Ignoring stale cached context window for ${modelId}: ${profile.contextWindow} -> ${inferred.inputTokens}`);
+        return null;
+      }
       return profile.contextWindow;
     }
   } catch (e) {

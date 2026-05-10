@@ -1,6 +1,6 @@
 {
   "claude": {
-    "currentModel": "claude-haiku-4-5-20251001",
+    "currentModel": "claude-opus-4-6",
     "targetUrl": "https://api.minimax.io/anthropic/v1/messages",
     "apiKey": "${env:MINIMAX_API_KEY}",
     "_upstreamModel": "MiniMax-M2.7",
@@ -13,9 +13,10 @@
     "currentModel": "MiniMax-M2.7",
     "targetUrl": "https://api.minimax.io/v1/text/chatcompletion_v2",
     "apiKey": "${env:MINIMAX_API_KEY}",
-    "contextWindow": 190512,
+    "contextWindow": 204800,
     "inputCostPer1M": 0,
-    "outputCostPer1M": 0
+    "outputCostPer1M": 0,
+    "contextModelId": "MiniMax-M2.7"
   },
   "bookmarks": [
     {
@@ -40,5 +41,18 @@
   },
   "requestLogLimit": 1000000000,
   "pendingRequestTimeoutMinutes": 1000,
-  "august_secret_key": "${env:GATEWAY_API_KEY}"
+  "memoryContextMaxChars": 24000,
+  "august_secret_key": "${env:GATEWAY_API_KEY}",
+  "customSkills": [
+    {
+      "name": "minimax-text-enhancer",
+      "enabled": true,
+      "description": "Enhances text using prompt engineering for MiniMax models",
+      "trigger": "",
+      "instructions": "# MiniMax Text Enhancer\n\n## Trigger\nThis skill activates when you want to improve, refine, or optimize any text for use with MiniMax models. It applies established prompt engineering principles tailored to MiniMax's architecture and strengths.\n\n## How It Works\n\nWhen you invoke this skill, provide the text you want to enhance. The skill will:\n\n1. **Analyze the input text** — Identify the core intent, task type, and any implicit requirements\n2. **Apply MiniMax-optimized enhancements**:\n   - Add clear, action-oriented instruction framing\n   - Structure the prompt with explicit context and constraints\n   - Include output format specifications when relevant\n   - Remove ambiguity while preserving the original intent\n   - Add necessary role or perspective assignments where helpful\n   - Optimize token usage for efficiency without sacrificing clarity\n3. **Output an enhanced version** ready for direct use\n\n## Enhancement Principles Applied\n\n- **Clarity**: Explicitly state what's needed rather than implying\n- **Structure**: Use headers, bullet points, or numbered lists for complex tasks\n- **Context**: Provide relevant background without overwhelming\n- **Constraints**: Define boundaries, limits, or specific requirements\n- **Format**: Specify exactly how output should be structured\n- **Role assignment**: Assign clear persona or expertise when applicable\n- **Examples**: Include few-shot examples for complex or ambiguous tasks\n\n## Task Categories Handled\n\n- General text/prompt enhancement\n- Question reformulation for better answers\n- Instruction refinement for specific tasks\n- Conversation improvement\n- Output format specification\n- Context enrichment\n\n## Usage\n\nSimply paste your text and indicate you'd like it enhanced. The skill will return an optimized version with explanations of key improvements made.",
+      "updatedAt": "2026-05-10T15:04:34.184Z"
+    }
+  ],
+  "mcpServers": [],
+  "customPlugins": []
 }

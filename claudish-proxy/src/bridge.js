@@ -6,11 +6,21 @@ const { getConfig, saveConfig, getProfile, saveProfile, getBookmarks, saveBookma
 const { getActivityLog, startRequest, endRequest, getRequestLog, getPendingRequests, getFilteredRequests, getStats, getRequestDetails, getRequestDetail, addSSEClient, removeSSEClient } = require('./utils/logger');
 const anthropicAdapter = require('./adapters/anthropic');
 const openaiAdapter = require('./adapters/openai');
-const { startMcpServers } = require('./utils/mcp-client');
+const { getMcpServerStatus, restartMcpServers, startMcpServers } = require('./utils/mcp-client');
+const { deleteMcpServer, getMcpServersForUi, saveCustomMcpServer } = require('./utils/mcp-registry');
+const { deleteSkill, getSkills, saveSkill } = require('./utils/skills');
+const { deletePlugin, getPlugins } = require('./utils/plugins');
+const { readJsonBody, sendError, sendJson } = require('./utils/http-utils');
+const { redactForDisplay } = require('./utils/redact');
+const { DEFAULT_CONTEXT_MAX_CHARS, buildSystemPromptDetails } = require('./utils/context-builder');
 const { executeManagedWebTool } = require('./utils/local-web');
+const { createHostFilesFolder, getCompatibilityStatus } = require('./utils/compatibility');
+const { importCapabilityLink } = require('./utils/link-importer');
 
 const UI_PATH = path.join(__dirname, 'ui.html');
+const TAILWIND_CSS_PATH = path.join(__dirname, 'tailwind.generated.css');
 const LISTEN_PORT = Number(process.env.CLAUDISH_PROXY_PORT || process.env.PORT || 8080);
+const MAX_CONTEXT_MAX_CHARS = 64000;
 
 function summarizeRequestHeaders(headers) {
     const result = {};
@@ -153,9 +163,136 @@ const server = http.createServer(async (req, res) => {
         return res.end(fs.readFileSync(UI_PATH, 'utf8'));
     }
 
+    if (req.url === '/favicon.ico' && req.method === 'GET') {
+        res.writeHead(204);
+        return res.end();
+    }
+
+    if (req.url === '/tailwind.generated.css' && req.method === 'GET') {
+        if (!fs.existsSync(TAILWIND_CSS_PATH)) {
+            res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+            return res.end('Generated Tailwind stylesheet is missing.');
+        }
+        res.writeHead(200, {
+            'Content-Type': 'text/css; charset=utf-8',
+            'Cache-Control': 'no-store'
+        });
+        return res.end(fs.readFileSync(TAILWIND_CSS_PATH, 'utf8'));
+    }
+
     if (req.url === '/ui/config' && req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify(getConfig()));
+    }
+
+    if (req.url === '/ui/config/safe' && req.method === 'GET') {
+        return sendJson(res, redactForDisplay(getConfig()));
+    }
+
+    if (req.url === '/ui/compatibility' && req.method === 'GET') {
+        return sendJson(res, getCompatibilityStatus());
+    }
+
+    if (req.url === '/ui/host-files/folder' && req.method === 'POST') {
+        try {
+            const data = await readJsonBody(req);
+            return sendJson(res, {
+                folder: createHostFilesFolder(data.name),
+                compatibility: getCompatibilityStatus()
+            });
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url === '/ui/plugins' && req.method === 'GET') {
+        return sendJson(res, { plugins: getPlugins() });
+    }
+
+    if (req.url.startsWith('/ui/plugins/') && req.method === 'DELETE') {
+        try {
+            const name = decodeURIComponent(req.url.split('/').pop());
+            return sendJson(res, { ...deletePlugin(name), plugins: getPlugins() });
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url === '/ui/import-link' && req.method === 'POST') {
+        try {
+            const data = await readJsonBody(req);
+            const imported = await importCapabilityLink({
+                url: data.url,
+                enableMcp: data.enableMcp === true
+            });
+            let status = getMcpServerStatus();
+            if (imported.enabledMcpServers.length > 0) {
+                status = await restartMcpServers(getProfile('claude')?.apiKey || '');
+            }
+            return sendJson(res, { imported, status, plugins: getPlugins() });
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url === '/ui/mcp' && req.method === 'GET') {
+        return sendJson(res, {
+            servers: getMcpServersForUi(),
+            status: getMcpServerStatus()
+        });
+    }
+
+    if (req.url === '/ui/mcp' && req.method === 'POST') {
+        try {
+            const data = await readJsonBody(req);
+            const saved = saveCustomMcpServer(data);
+            const status = await restartMcpServers(getProfile('claude')?.apiKey || '');
+            return sendJson(res, { saved, status });
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url === '/ui/mcp/restart' && req.method === 'POST') {
+        try {
+            const status = await restartMcpServers(getProfile('claude')?.apiKey || '');
+            return sendJson(res, { status });
+        } catch (e) {
+            return sendError(res, e, 500);
+        }
+    }
+
+    if (req.url.startsWith('/ui/mcp/') && req.method === 'DELETE') {
+        try {
+            const name = decodeURIComponent(req.url.split('/').pop());
+            const result = deleteMcpServer(name);
+            const status = await restartMcpServers(getProfile('claude')?.apiKey || '');
+            return sendJson(res, { ...result, status });
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url === '/ui/skills' && req.method === 'GET') {
+        return sendJson(res, { skills: getSkills() });
+    }
+
+    if (req.url === '/ui/skills' && req.method === 'POST') {
+        try {
+            const saved = saveSkill(await readJsonBody(req));
+            return sendJson(res, { saved, skills: getSkills() });
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url.startsWith('/ui/skills/') && req.method === 'DELETE') {
+        try {
+            const name = decodeURIComponent(req.url.split('/').pop());
+            return sendJson(res, { ...deleteSkill(name), skills: getSkills() });
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
     }
 
     // ── Real-time SSE stream ──
@@ -231,6 +368,10 @@ const server = http.createServer(async (req, res) => {
                 if (data.pendingRequestTimeoutMinutes !== undefined) {
                     config.pendingRequestTimeoutMinutes = Math.max(1, parseInt(data.pendingRequestTimeoutMinutes, 10) || 10);
                 }
+                if (data.memoryContextMaxChars !== undefined) {
+                    const parsedLimit = parseInt(data.memoryContextMaxChars, 10);
+                    config.memoryContextMaxChars = Math.max(8000, Math.min(MAX_CONTEXT_MAX_CHARS, Number.isFinite(parsedLimit) ? parsedLimit : DEFAULT_CONTEXT_MAX_CHARS));
+                }
                 saveConfig(config);
             }
             res.writeHead(200);
@@ -267,6 +408,30 @@ const server = http.createServer(async (req, res) => {
         const { readAugustCoreMemory } = require('./utils/august-tools');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify(readAugustCoreMemory()));
+    }
+
+    if (req.url.startsWith('/ui/memory/preview') && req.method === 'GET') {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const profileName = url.searchParams.get('profile') || 'claude';
+        const profile = getProfile(profileName);
+        const model = profileName === 'claude'
+            ? (profile?._upstreamModel || profile?.currentModel)
+            : profile?.currentModel;
+        const contextMaxChars = Number(url.searchParams.get('maxChars') || getConfig().memoryContextMaxChars || DEFAULT_CONTEXT_MAX_CHARS);
+        const details = buildSystemPromptDetails(null, {
+            model,
+            targetUrl: profile?.targetUrl,
+            includeWindowsContext: profileName !== 'claude',
+            contextMaxChars
+        });
+        return sendJson(res, {
+            profile: profileName,
+            model,
+            targetUrl: profile?.targetUrl,
+            length: details.length,
+            prompt: details.prompt,
+            context: details.globalContext
+        });
     }
 
     if (req.url === '/ui/memory' && req.method === 'POST') {
@@ -647,14 +812,13 @@ const server = http.createServer(async (req, res) => {
 
 console.log(`--- AI Adapter Active on Port ${LISTEN_PORT} ---`);
 
-// Initialize MCP Servers async (if enabled)
-// Will use config key if available, or fallback to env var
-const claudeProfile = getProfile('claude');
-startMcpServers(claudeProfile?.apiKey || '').then(() => {
-    server.listen(LISTEN_PORT, '0.0.0.0');
+server.listen(LISTEN_PORT, '0.0.0.0', () => {
     console.log('[bridge] Server is listening...');
-}).catch(e => {
+});
+
+// Initialize MCP servers after the HTTP listener is available so the dashboard
+// remains reachable while uvx/npx tools warm their package caches.
+const claudeProfile = getProfile('claude');
+startMcpServers(claudeProfile?.apiKey || '').catch(e => {
     console.error('[bridge] Failed to start MCP servers:', e);
-    // Start anyway so proxy doesn't completely die if MCP fails
-    server.listen(LISTEN_PORT, '0.0.0.0');
 });

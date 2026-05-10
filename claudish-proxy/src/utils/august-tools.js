@@ -105,14 +105,11 @@ function normalizeAugustCoreMemory(raw) {
     if (!Array.isArray(merged.conversation_checkpoints)) merged.conversation_checkpoints = [];
 
     merged.active_projects = merged.active_projects
-        .filter(p => p && typeof p === 'object' && p.name)
-        .slice(-20);
+        .filter(p => p && typeof p === 'object' && p.name);
     merged.recent_events = merged.recent_events
-        .filter(e => e && typeof e === 'object' && e.summary)
-        .slice(-40);
+        .filter(e => e && typeof e === 'object' && e.summary);
     merged.conversation_checkpoints = merged.conversation_checkpoints
-        .filter(c => c && typeof c === 'object' && c.summary)
-        .slice(-20);
+        .filter(c => c && typeof c === 'object' && c.summary);
 
     return merged;
 }
@@ -152,13 +149,13 @@ function renderAugustCoreMemory(memoryInput) {
         }).join('\n')
         : '- none recorded';
     const recentEvents = memory.recent_events.length > 0
-        ? memory.recent_events.slice(-8).map(event => {
+        ? memory.recent_events.map(event => {
             const when = event.timestamp ? `[${event.timestamp}] ` : '';
             return `- ${when}${event.summary}`;
         }).join('\n')
         : '- none recorded';
     const checkpoints = memory.conversation_checkpoints.length > 0
-        ? memory.conversation_checkpoints.slice(-6).map(cp => {
+        ? memory.conversation_checkpoints.map(cp => {
             const topic = cp.topic ? `${cp.topic}: ` : '';
             return `- ${topic}${cp.summary}`;
         }).join('\n')
@@ -185,7 +182,6 @@ function upsertProject(memory, project) {
     const existingIndex = normalized.active_projects.findIndex(p => p.name === project.name);
     if (existingIndex >= 0) normalized.active_projects[existingIndex] = { ...normalized.active_projects[existingIndex], ...nextProject };
     else normalized.active_projects.push(nextProject);
-    normalized.active_projects = normalized.active_projects.slice(-20);
     return normalized;
 }
 
@@ -206,7 +202,6 @@ function appendRecentEvent(memory, event) {
         timestamp: event.timestamp || new Date().toISOString(),
         source: event.source || ''
     });
-    normalized.recent_events = normalized.recent_events.slice(-40);
     return normalized;
 }
 
@@ -217,7 +212,6 @@ function appendCheckpoint(memory, checkpoint) {
         summary: checkpoint.summary,
         timestamp: checkpoint.timestamp || new Date().toISOString()
     });
-    normalized.conversation_checkpoints = normalized.conversation_checkpoints.slice(-20);
     return normalized;
 }
 

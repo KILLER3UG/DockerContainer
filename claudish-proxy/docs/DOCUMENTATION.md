@@ -67,6 +67,11 @@ Normally, Claude Code only works with Anthropic's API, and Codex only works with
        │   (HTTP Server)   │
        └─────────┬─────────┘
                  │
+       ┌─────────▼─────────┐
+       │  August Security  │  ← Validates keys & local IPs
+       │      Gateway      │
+       └─────────┬─────────┘
+                 │
        ┌─────────┴─────────┐
        │                   │
 ┌──────▼──────┐   ┌───────▼──────┐
@@ -74,11 +79,16 @@ Normally, Claude Code only works with Anthropic's API, and Codex only works with
 │   Adapter   │   │   Adapter    │
 └──────┬──────┘   └───────┬──────┘
        │                   │
+       │ (Injects August & │ (Injects August &
+       │  MCP Tools)       │  MCP Tools)
+       │                   │
        │  translates to    │ passes through /
-       │  OpenAI format    │ translates Responses API
+       │  OpenAI format    │ translates Responses
        │                   │
        └─────────┬─────────┘
                  │
+                 │ (Async Auto-Memory Extraction to Vector DB)
+                 ▼
     ┌────────────┼────────────┐
     │            │            │
 ┌───▼───┐  ┌───▼───┐  ┌────▼────┐
@@ -96,10 +106,11 @@ Normally, Claude Code only works with Anthropic's API, and Codex only works with
    - Anthropic tool definitions (`name`, `input_schema`)
    - Anthropic parameters (`max_tokens`, `stop_sequences`)
 
-2. The **bridge** (`bridge.js`) receives the request and routes it to the **Anthropic Adapter** because the path contains `/v1/messages`.
+2. The **August Security Gateway** (`bridge.js`) intercepts the request. It verifies the IP (allowing local Docker/host network) and checks the `august_secret_key` before routing it to the **Anthropic Adapter**.
 
 3. The **Anthropic Adapter** (`adapters/anthropic.js`):
    - Reads the `claude` profile from `config.json` to get the upstream URL, model ID, and API key
+   - **Injects August Agentic Tools** (e.g., `august__bash`, `august__read_file`) and dynamically loaded **MCP tools**.
    - Translates Anthropic messages to OpenAI format:
      - `system` prompt → OpenAI `system` message
      - `user`/`assistant` messages → OpenAI `user`/`assistant` messages
@@ -108,7 +119,7 @@ Normally, Claude Code only works with Anthropic's API, and Codex only works with
    - Translates Anthropic tool definitions to OpenAI function definitions
    - Encodes tool IDs using base64url for deterministic bidirectional mapping
    - Performs **smart context compaction** (only if estimated tokens > 88% of context window)
-   - Appends Windows environment hints to the system prompt
+   - Appends Windows environment hints and memory context to the system prompt
    - Applies **self-healing** to tool error results
    - Sends the translated request to the upstream provider
 
@@ -122,18 +133,21 @@ Normally, Claude Code only works with Anthropic's API, and Codex only works with
 
 6. Claude Code receives what looks like a normal Anthropic response and works perfectly.
 
+7. **Asynchronous Memory Extraction:** In the background, `auto-memory.js` parses the final interaction, extracts persistent facts, and saves the conversation embeddings to the **Infinite Vector DB**.
+
 **When Codex sends a request:**
 
 1. Codex thinks it's talking to OpenAI. It sends a `POST /v1/responses` or `POST /v1/chat/completions` request.
 
-2. The **bridge** routes it to the **OpenAI Adapter** (`adapters/openai.js`).
+2. The **August Security Gateway** intercepts and validates the request before routing it to the **OpenAI Adapter** (`adapters/openai.js`).
 
 3. The **OpenAI Adapter**:
    - Reads the `codex` profile from `config.json`
+   - **Injects August Agentic Tools** and **MCP tools**.
    - For `/v1/responses`: translates the Responses API format to Chat Completions format
    - For `/v1/chat/completions`: passes through mostly as-is
    - Performs smart context compaction
-   - Appends Windows environment hints
+   - Appends Windows environment hints and memory context
    - Applies self-healing
    - Sends to upstream
 
@@ -142,6 +156,8 @@ Normally, Claude Code only works with Anthropic's API, and Codex only works with
 5. For `/v1/responses`, the adapter **synthesizes SSE events** manually because free providers don't support the Responses API natively. It generates the full event sequence: `response.created` → `response.in_progress` → text deltas → `response.completed` → `[DONE]`.
 
 6. Codex receives what looks like a normal OpenAI streaming response.
+
+7. **Asynchronous Memory Extraction:** In the background, `auto-memory.js` extracts facts and saves semantic embeddings to the **Infinite Vector DB**.
 
 ---
 
@@ -1834,6 +1850,32 @@ This file is kept for reference but is **not used** by the current system. `brid
 
 ---
 
+### 21. The August Agentic Engine
+
+The proxy has evolved beyond a simple HTTP router into an **Agentic Middleware** by incorporating custom tools, persistent memory, and the Model Context Protocol (MCP).
+
+#### August Tools & Security Gateway (`august-tools.js`)
+When a request passes through the `/v1/` routes, the proxy injects its own tools (e.g., `august__bash`, `august__read_file`). A strict Host Path Permission Firewall ensures the AI cannot execute commands or modify files outside of explicitly allowed directories (e.g., `C:\Users\rober\LocalFolders`).
+
+#### Hybrid Infinite Memory (`auto-memory.js` & `vector-db.js`)
+At the end of a successful conversation turn, the proxy spawns an asynchronous background LLM call. It parses the interaction (stripping reasoning `<think>` tags) to extract persistent facts and summarize the conversation.
+- **Core Memory (`august_core_memory.json`)**: Stores user profile data, global context, active projects, and recent events.
+- **Infinite Vector DB (`august_infinite_memory.json`)**: Stores semantic embeddings of conversation summaries using cosine similarity. The AI can query this using `august__search_past_conversations`.
+
+#### Model Context Protocol (MCP) Integration (`mcp-client.js`)
+The proxy dynamically connects to local MCP servers via stdio. It fetches the available tools from these servers and registers them as native tools (e.g., `mcp__serverName__toolName`), making them instantly available to Claude Code or Codex.
+
+#### The Proxy Execution Gate & Pre-Flight Validation (`validator.js`)
+Before any tool is executed, `validator.js` checks the arguments against the JSON schema. If the schema is invalid, it intercepts the call and injects a `[Validation Error]` with self-healing hints. **Crucially, it acts as an Execution Gate:** It hard-blocks any mutating tools (e.g., `BashTool`, `mcp__filesystem__write_file`) if the AI has not explicitly established or read a `plan.md` in the conversation history. This forces the AI to plan its architecture before writing code.
+
+#### Web Search & Local Scraping (`local-web.js`)
+The proxy provides robust local web search capabilities (e.g., via DuckDuckGo HTML scraping) natively, without relying on external API keys. This is exposed to the AI via `web_search` and powers the `/search` and `/fetch` UI endpoints.
+
+#### Upstream Backoff & Retry (`upstream.js`)
+When free-tier upstream providers throw `429 Too Many Requests` or `503 Service Unavailable`, `upstream.js` calculates exponential backoff and jitter (reading `Retry-After` headers if available) to automatically retry the request without failing the user's CLI session.
+
+---
+
 ## File Structure
 
 ```
@@ -1851,11 +1893,20 @@ claudish-proxy/
 │   ├── anthropic.js       # /v1/messages handler (Claude)
 │   └── openai.js          # /v1/chat/completions & /v1/responses handler (Codex)
 └── utils/
+    ├── august-tools.js    # August Security Gateway, Host Tools, & Core Memory
+    ├── auto-memory.js     # Async background fact extraction & summarization
     ├── config.js          # Config loader with caching
+    ├── inspector.js       # Request capture for debug UI
+    ├── local-web.js       # Web search capabilities
     ├── logger.js          # Activity & request tracking
+    ├── mcp-client.js      # Dynamic MCP server connector & tool registry
+    ├── mcp-config.js      # Configuration for local MCP servers
     ├── models.js          # Model registry & context window detection
+    ├── selfheal.js        # Error detection & fix hints
     ├── tokens.js          # Token estimation
-    └── selfheal.js        # Error detection & fix hints
+    ├── upstream.js        # Rate-limit exponential backoff and retry logic
+    ├── validator.js       # Pre-flight schema validation & plan.md Execution Gate
+    └── vector-db.js       # Zero-dependency Cosine Similarity Vector Database
 ```
 
 ---
