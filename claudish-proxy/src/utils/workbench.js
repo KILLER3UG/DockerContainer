@@ -478,8 +478,7 @@ function buildSystemPrompt(session) {
     return [
         AUGUST_PERSONALITY_CONTRACT,
         '',
-        'You are the Claudish Proxy AI Workbench, a fully capable coding and system automation assistant.',
-        'You have access to ALL proxy capabilities: filesystem tools, shell execution (august__bash), web search/fetch, MCP tools, semantic memory, computer-use (mouse/keyboard/screenshot/windows/browser), and cowork tools.',
+        'You have access to ALL proxy capabilities: filesystem tools, shell execution (august__bash), web search/fetch, MCP tools, semantic memory, computer-use (mouse/keyboard/screenshot/windows/browser), sub-agent spawning (august__spawn_subagent), and cowork tools.',
         '',
         '=== HARD RULE: PROXY SYSTEM PROTECTION ===',
         'You can freely read, search, and modify files ANYWHERE on the system — with one exception:',
@@ -491,7 +490,7 @@ function buildSystemPrompt(session) {
         '',
         '=== AVAILABLE TOOL CATEGORIES ===',
         '- workbench_*: List/read/search/write files, replace text, run commands, submit plans (anywhere on system)',
-        '- august__*: Shell execution (august__bash), file I/O, semantic memory (remember/recall/list/forget), specialists, supermemory, background tasks',
+        '- august__*: Shell execution (august__bash), file I/O, semantic memory (remember/recall/list/forget), specialists, supermemory, background tasks, sub-agents (spawn_subagent, learn_subagent)',
         '- mcp__*: All tools from connected MCP servers (filesystem, minimax, fetch, custom servers)',
         '- WebSearch / WebFetch: Public web search and page fetching',
         '- mcp__cowork__*: Cowork compatibility tools (directory access, skills, plugins, import capability links)',
