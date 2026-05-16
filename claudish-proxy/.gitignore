@@ -1,2 +1,6 @@
 request-log.json
 .env
+host-agent/node_modules/
+src/august_infinite_memory.json
+src/august_semantic_memory.json
+src/utils/debug.txt
