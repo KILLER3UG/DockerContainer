@@ -84,7 +84,32 @@ function searchCheckpoints(queryEmbedding, topK = 3) {
     return scored.slice(0, topK);
 }
 
+function readVectorEntries() {
+    return readDB();
+}
+
+function searchTextEntries(query, topK = 8) {
+    const terms = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
+    if (terms.length === 0) return [];
+    return readDB()
+        .map(entry => {
+            const haystack = `${entry.topic || ''} ${entry.summary || ''}`.toLowerCase();
+            const matches = terms.filter(term => haystack.includes(term)).length;
+            return {
+                topic: entry.topic,
+                summary: entry.summary,
+                timestamp: entry.timestamp,
+                matches
+            };
+        })
+        .filter(entry => entry.matches > 0)
+        .sort((a, b) => b.matches - a.matches)
+        .slice(0, topK);
+}
+
 module.exports = {
+    readVectorEntries,
     saveCheckpointWithEmbedding,
-    searchCheckpoints
+    searchCheckpoints,
+    searchTextEntries
 };

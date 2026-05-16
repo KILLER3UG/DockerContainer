@@ -6,8 +6,17 @@ const { saveProfile, getProfile } = require('./utils/config');
 
 const PROXY_URL = process.env.CLAUDISH_PROXY_URL || 'http://127.0.0.1:8085';
 const IS_TTY = process.stdin.isTTY;
-const CLAUDE_CLIENT_MODEL_ALIAS = process.env.CLAUDISH_CLAUDE_ALIAS || 'claude-opus-4-6';
-const CODEX_CLIENT_MODEL_ALIAS = 'gpt-4o';
+
+// Model prefix filter by tool type
+const PROXY_MODEL_PREFIX = {
+    claude: 'claude-',   // Anthropic-shaped proxy models
+    codex:   'gpt-'      // OpenAI-shaped proxy models
+};
+// Default public aliases used by each CLI
+const CLI_DEFAULT_ALIAS = {
+    claude: process.env.CLAUDISH_CLAUDE_ALIAS || 'claude-opus-4-6',
+    codex:   'gpt-4o'
+};
 
 function hasExplicitModelArg(args) {
     for (let i = 0; i < args.length; i++) {
@@ -31,8 +40,27 @@ function question(prompt) {
     });
 }
 
-async function fetchModels() {
+async function fetchLocalModels() {
     return new Promise((resolve, reject) => {
+        const req = http.get(`${PROXY_URL}/v1/models`, { timeout: 5000 }, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                try {
+                    const parsed = JSON.parse(data);
+                    resolve(parsed.data || []);
+                } catch (e) {
+                    reject(e);
+                }
+            });
+        });
+        req.on('error', reject);
+        req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')); });
+    });
+}
+
+async function fetchUpstreamModels() {
+    return new Promise((resolve) => {
         const req = http.get(`${PROXY_URL}/ui/models`, { timeout: 5000 }, (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);
@@ -41,106 +69,153 @@ async function fetchModels() {
                     const models = JSON.parse(data);
                     resolve(Array.isArray(models) ? models : []);
                 } catch (e) {
-                    reject(e);
+                    resolve([]);
                 }
             });
         });
-        req.on('error', reject);
-        req.on('timeout', () => {
-            req.destroy();
-            reject(new Error('Timeout'));
-        });
+        req.on('error', () => resolve([]));
+        req.on('timeout', () => { req.destroy(); resolve([]); });
     });
 }
 
 function updateConfig(tool, model) {
     try {
         if (tool === 'claude') {
+            // Claude CLI: preserve the public anthropic alias, store upstream model + provider
             const existingProfile = getProfile('claude') || {};
-            const preservedAlias = typeof existingProfile.currentModel === 'string' && existingProfile.currentModel.toLowerCase().startsWith('claude-')
-                ? existingProfile.currentModel
-                : CLAUDE_CLIENT_MODEL_ALIAS;
+            const prefix = PROXY_MODEL_PREFIX.claude;
+            // If selected model starts with 'claude-' it's a proxy model → use as public alias
+            // Otherwise use the default alias (upstream providers don't have claude-* names)
+            const isProxyModel = model.id.toLowerCase().startsWith(prefix);
+            const preservedAlias = isProxyModel
+                ? model.id
+                : (typeof existingProfile.currentModel === 'string' && existingProfile.currentModel.toLowerCase().startsWith(prefix)
+                    ? existingProfile.currentModel
+                    : CLI_DEFAULT_ALIAS.claude);
 
             saveProfile('claude', {
                 ...existingProfile,
                 currentModel: preservedAlias,
                 _upstreamModel: model.id,
-                targetUrl: model.url,
-                apiKey: model.key || ''
+                targetUrl: model.url || existingProfile.targetUrl || null,
+                apiKey: model.key || existingProfile.apiKey || ''
             });
-            console.log(`[launch] Set claude upstream model -> "${model.id}"`);
-            console.log(`[launch] Preserving claude public alias -> "${preservedAlias}"`);
-            console.log(`[launch] Set claude provider -> "${model.provider}" (${model.url})`);
+            console.log(`  Set upstream model: ${model.id}`);
+            console.log(`  Public alias: ${preservedAlias}`);
+            if (model.provider) console.log(`  Provider: ${model.provider} ${model.url ? '(' + model.url + ')' : ''}`);
             return;
         }
 
-        saveProfile(tool, {
-            currentModel: model.id,
-            targetUrl: model.url,
-            apiKey: model.key || ''
+        // Codex CLI: preserve the last gpt-* proxy alias when an upstream model is chosen
+        const existingProfile = getProfile('codex') || {};
+        const prefix = PROXY_MODEL_PREFIX.codex;
+        const isProxyModel = model.id.toLowerCase().startsWith(prefix);
+        const preservedAlias = isProxyModel
+            ? model.id
+            : (typeof existingProfile.currentModel === 'string' && existingProfile.currentModel.toLowerCase().startsWith(prefix)
+                ? existingProfile.currentModel
+                : CLI_DEFAULT_ALIAS.codex);
+
+        saveProfile('codex', {
+            ...existingProfile,
+            currentModel: preservedAlias,
+            _upstreamModel: model.id,
+            targetUrl: model.url || existingProfile.targetUrl || null,
+            apiKey: model.key || existingProfile.apiKey || ''
         });
-        console.log(`[launch] Set ${tool} model -> "${model.id}"`);
-        console.log(`[launch] Set ${tool} provider -> "${model.provider}" (${model.url})`);
+        console.log(`  Set upstream model: ${model.id}`);
+        console.log(`  Public alias: ${preservedAlias}`);
+        if (model.provider) console.log(`  Provider: ${model.provider} ${model.url ? '(' + model.url + ')' : ''}`);
     } catch (e) {
-        console.error('[launch] Warning: Could not update config.json:', e.message);
+        console.error('  Warning: Could not update config.json:', e.message);
     }
 }
 
 async function main() {
-    console.log('\n╔══════════════════════════════════════╗');
-    console.log('║      Claudish Proxy Launcher         ║');
-    console.log('║   (Ollama launch-style wrapper)      ║');
-    console.log('╚══════════════════════════════════════╝\n');
-
     let tool = process.argv[2];
     if (!tool || (tool !== 'claude' && tool !== 'codex')) {
-        if (!IS_TTY) {
-            console.log('[launch] Non-interactive mode. Use: launch.js [claude|codex] [args]');
-            process.exit(1);
-        }
-        console.log('Select integration:');
-        console.log('  [1] Claude Code  (Anthropic API)');
-        console.log('  [2] Codex        (OpenAI API)');
-        const choice = await question('\nEnter choice: ');
-        tool = choice.trim() === '2' ? 'codex' : 'claude';
+        console.log('\n  Claudish Proxy Launcher\n');
+        console.log('  Usage:');
+        console.log('    claude-local  [--model <model>] [args...]   Anthropic/Claude CLI');
+        console.log('    codex-local   [--model <model>] [args...]   OpenAI/Codex CLI');
+        console.log('');
+        process.exit(1);
     }
 
-    console.log(`\n[launch] Fetching models from ${PROXY_URL}...`);
-    let models = [];
+    console.log(`\n  Claudish Proxy — ${tool.toUpperCase()}`);
+    console.log('  ' + '─'.repeat(46));
+    console.log(`  Proxy: ${PROXY_URL}`);
+
+    // Fetch both model sources in parallel
+    let allProxy = [];
+    let upstream = [];
     try {
-        models = await fetchModels();
+        [allProxy, upstream] = await Promise.all([
+            fetchLocalModels(),
+            fetchUpstreamModels()
+        ]);
     } catch (e) {
-        console.log(`[launch] Proxy unreachable (${e.message}). Using fallback.`);
+        console.log(`  Proxy unreachable (${e.message}). Using fallback.`);
     }
+
+    // Filter proxy models by tool type
+    const prefix = PROXY_MODEL_PREFIX[tool] || '';
+    const proxyModels = allProxy.filter(m => m.id.toLowerCase().startsWith(prefix.toLowerCase()));
+
+    const displayModels = [
+        ...proxyModels.map(m => ({ id: m.id, name: m.id, provider: 'proxy', url: null, key: null, section: 'proxy' })),
+        ...upstream.map(m => ({ id: m.id, name: m.name || m.id, provider: m.provider || 'upstream', url: m.url, key: m.key, section: 'upstream' }))
+    ];
 
     let selectedModel = null;
 
-    if (models.length > 0) {
-        console.log(`\n┌─ Available Models (${models.length}) ─┐`);
-        models.forEach((m, i) => {
-            const label = m.name || m.id;
-            console.log(`  [${(i + 1).toString().padStart(2)}] ${label}`);
-        });
-        console.log(`  [ 0] Keep current model from config.json`);
-        console.log('└─────────────────────────────────────┘');
+    if (displayModels.length > 0) {
+        console.log(`\n  Available Models (${displayModels.length})`);
+        console.log('  ' + '─'.repeat(56));
+
+        // Section 1: Proxy models for this tool
+        if (proxyModels.length > 0) {
+            console.log(`  Proxy models (${prefix}*):`);
+            const numW = displayModels.length.toString().length;
+            proxyModels.forEach((m, i) => {
+                const idx = (i + 1).toString().padStart(numW);
+                console.log(`  [${idx}]  ${m.id}`);
+            });
+        }
+
+        // Section 2: Upstream providers (all work with both CLIs via bridge)
+        if (upstream.length > 0) {
+            console.log('  Upstream providers:');
+            const numW = displayModels.length.toString().length;
+            upstream.forEach((m, i) => {
+                const label = m.name || m.id;
+                const idx = (proxyModels.length + i + 1).toString().padStart(numW);
+                console.log(`  [${idx}] ${label}`);
+            });
+        }
+
+        const zeroPad = '0'.padStart(displayModels.length.toString().length);
+        console.log(`  [${zeroPad}] Keep current model from config.json`);
+        console.log('  ' + '─'.repeat(56));
 
         let choice;
         if (IS_TTY) {
-            choice = await question('\nSelect model (number): ');
+            choice = await question('\n  Select model (number): ');
         } else {
             choice = '0';
-            console.log('[launch] Non-interactive: auto-selecting current model (0)');
+            console.log('  Non-interactive: keeping current model (0)');
         }
+
         const idx = parseInt(choice.trim()) - 1;
-        if (idx >= 0 && idx < models.length) {
-            selectedModel = models[idx];
+        if (idx >= 0 && idx < displayModels.length) {
+            selectedModel = displayModels[idx];
             updateConfig(tool, selectedModel);
         }
     } else {
-        console.log('[launch] No models fetched. Using current config.json model.');
+        console.log('  No models fetched. Using current config.json model.');
     }
 
-    console.log(`\n[launch] Starting ${tool.toUpperCase()}...\n`);
+    console.log(`\n  Starting ${tool.toUpperCase()}...\n`);
 
     const env = { ...process.env };
     const extraArgs = process.argv.slice(3);
@@ -150,20 +225,24 @@ async function main() {
         env.ANTHROPIC_BASE_URL = `${PROXY_URL}/v1`;
         env.ANTHROPIC_API_KEY = 'lm-studio';
         env.ANTHROPIC_AUTH_TOKEN = 'lm-studio';
-        // Keep the client pinned to a Claude-shaped alias while the proxy
-        // routes to the real upstream model configured in config.json.
         args = hasExplicitModelArg(extraArgs)
             ? [...extraArgs]
-            : ['--model', CLAUDE_CLIENT_MODEL_ALIAS, ...extraArgs];
+            : ['--model', CLI_DEFAULT_ALIAS.claude, ...extraArgs];
     } else {
+        // Codex: set env vars pointing at the proxy. The proxy's bridge handles
+        // the conversion. config.toml already has [providers.openai] pointing at
+        // the proxy, but env vars take precedence and ensure a clean setup.
+        const codexProfile = getProfile('codex') || {};
+        const defaultModel = codexProfile.currentModel || CLI_DEFAULT_ALIAS.codex;
         env.OPENAI_API_KEY = 'local-proxy';
+        env.OPENAI_BASE_URL = `${PROXY_URL}/v1`;
         args = [
-            '--oss',
-            '--local-provider', 'openai-custom',
-            '-c', 'model_providers.openai-custom.base_url=' + PROXY_URL + '/v1',
-            '-c', 'model_providers.openai-custom.name=Proxy'
+            '-c', `providers.openai.api_base=${PROXY_URL}/v1`,
+            '-c', 'providers.openai.api_key=local-proxy'
         ];
-        args.push('-m', CODEX_CLIENT_MODEL_ALIAS);
+        if (!hasExplicitModelArg(extraArgs)) {
+            args.push('-m', defaultModel);
+        }
         args.push(...extraArgs);
     }
 
@@ -175,11 +254,11 @@ async function main() {
     });
 
     child.on('error', (err) => {
-        console.error(`\n[launch] Failed to start ${tool}: ${err.message}`);
+        console.error(`\n  Failed to start ${tool}: ${err.message}`);
         if (err.code === 'ENOENT') {
-            console.error(`         Is "${tool}" installed and on your PATH?`);
-            console.error(`         npm install -g @anthropic-ai/claude-code   # for claude`);
-            console.error(`         npm install -g @openai/codex              # for codex`);
+            console.error(`  Is "${tool}" installed and on your PATH?`);
+            console.error(`  npm install -g @anthropic-ai/claude-code   # for claude`);
+            console.error(`  npm install -g @openai/codex              # for codex`);
         }
         process.exit(1);
     });
@@ -190,6 +269,6 @@ async function main() {
 }
 
 main().catch(e => {
-    console.error('[launch] Error:', e);
+    console.error('  Error:', e);
     process.exit(1);
 });

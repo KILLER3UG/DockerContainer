@@ -215,6 +215,134 @@ function appendCheckpoint(memory, checkpoint) {
     return normalized;
 }
 
+// ── Sub-agent Strategy Config ──
+const SUBAGENT_CONFIG_FILE = path.join(__dirname, '..', 'august_subagent_config.json');
+
+function getDefaultSubagentConfig() {
+    return {
+        current: {
+            name: 'default',
+            system_prompt: 'You are a focused sub-agent spawned by August. You have access to MCP servers, web search/fetch, and file operations. Complete the assigned task efficiently using these tools. Report your findings clearly.',
+            max_loops: 5,
+            score: { completion_rate: 0, avg_loops: 0, total_runs: 0, error_rate: 0 },
+            source: 'built-in',
+            created: new Date().toISOString()
+        },
+        history: [],
+        observed_patterns: [],
+        metadata: {
+            last_learning_at: null,
+            total_learnings: 0,
+            total_spawns: 0,
+            total_successes: 0
+        }
+    };
+}
+
+function loadSubagentConfig() {
+    if (!fs.existsSync(SUBAGENT_CONFIG_FILE)) {
+        const def = getDefaultSubagentConfig();
+        fs.writeFileSync(SUBAGENT_CONFIG_FILE, JSON.stringify(def, null, 2));
+        return def;
+    }
+    try {
+        const raw = JSON.parse(fs.readFileSync(SUBAGENT_CONFIG_FILE, 'utf8'));
+        const def = getDefaultSubagentConfig();
+        return { ...def, ...raw, current: { ...def.current, ...(raw.current || {}) }, metadata: { ...def.metadata, ...(raw.metadata || {}) } };
+    } catch (e) {
+        return getDefaultSubagentConfig();
+    }
+}
+
+function saveSubagentConfig(config) {
+    fs.writeFileSync(SUBAGENT_CONFIG_FILE, JSON.stringify(config, null, 2));
+}
+
+function subagentConfigToContextBlock() {
+    const cfg = loadSubagentConfig();
+    const cur = cfg.current;
+    const hist = cfg.history;
+    const patterns = cfg.observed_patterns;
+    return `[August Sub-agent System]
+Current strategy: "${cur.name}" (source: ${cur.source}, created: ${cur.created})
+Score: completion_rate=${(cur.score.completion_rate * 100).toFixed(0)}%, avg_loops=${cur.score.avg_loops.toFixed(1)}, error_rate=${(cur.score.error_rate * 100).toFixed(0)}%
+Total spawns: ${cfg.metadata.total_spawns} | Successes: ${cfg.metadata.total_successes} | Learnings: ${cfg.metadata.total_learnings}
+Archived strategies: ${hist.length} | Observed client patterns: ${patterns.length}
+
+You can improve your sub-agent by calling august__learn_subagent to scan all clients passing through the proxy, discover better patterns, and upgrade your strategy.`;
+}
+
+// ── Sub-agent Tool Execution ──
+// Build tool definitions for the sub-agent from all available managed proxy tools
+function buildSubAgentToolDefinitions() {
+    const tools = [];
+    try {
+        const { getMcpToolDefinitions } = require('./mcp-client');
+        const mcpTools = getMcpToolDefinitions() || [];
+        mcpTools.forEach(t => tools.push(t));
+    } catch (e) { /* MCP may be disabled */ }
+    try {
+        const { getCoworkToolDefinitions } = require('./cowork-tools');
+        const coworkTools = getCoworkToolDefinitions() || [];
+        coworkTools.forEach(t => tools.push(t));
+    } catch (e) { /* ignore */ }
+    tools.push({
+        type: 'function',
+        function: {
+            name: 'web_search',
+            description: 'Search the web for up-to-date information on a given query. Returns a list of relevant results with titles, URLs, and snippets.',
+            parameters: { type: 'object', properties: { query: { type: 'string', description: 'The search query.' } }, required: ['query'] }
+        }
+    });
+    tools.push({
+        type: 'function',
+        function: {
+            name: 'web_fetch',
+            description: 'Fetch and return the text content of a URL. Use this to read articles, documentation, or any web page.',
+            parameters: { type: 'object', properties: { url: { type: 'string', description: 'The full URL to fetch.' } }, required: ['url'] }
+        }
+    });
+    return tools;
+}
+
+// Convert OpenAI-format tool definitions to Anthropic format
+function toolsToAnthropicFormat(openAiTools) {
+    return openAiTools.map(t => ({
+        name: t.function.name,
+        description: t.function.description,
+        input_schema: t.function.parameters
+    }));
+}
+
+// Known web tool names for sub-agent dispatch
+const SUBAGENT_WEB_TOOL_NAMES = new Set(['web_search', 'web_fetch', 'WebSearch', 'WebFetch', 'mcp__workspace__web_search', 'mcp__workspace__web_fetch']);
+
+function isWebToolName(name) {
+    return typeof name === 'string' && SUBAGENT_WEB_TOOL_NAMES.has(name);
+}
+
+// Dispatch sub-agent tool calls to the correct managed proxy executor
+async function executeSubAgentTool(name, args) {
+    if (name === 'august__spawn_subagent') {
+        return '[Blocked] Sub-agents cannot spawn further sub-agents. Complete your task using the tools available.';
+    }
+    try {
+        if (isWebToolName(name)) {
+            const { executeManagedWebTool } = require('./local-web');
+            return await executeManagedWebTool(name, args);
+        }
+    } catch (e) { /* web tools not available */ }
+    try {
+        const { isMcpToolName, executeMcpToolCall } = require('./mcp-client');
+        if (isMcpToolName(name)) return await executeMcpToolCall(name, args);
+    } catch (e) { /* MCP not available */ }
+    try {
+        const { isCoworkToolName, executeCoworkToolCall } = require('./cowork-tools');
+        if (isCoworkToolName(name)) return await executeCoworkToolCall(name, args);
+    } catch (e) { /* cowork not available */ }
+    return `[Tool Error] Tool "${name}" is not available in sub-agent context.`;
+}
+
 const AUGUST_TOOLS = [
     {
         type: 'function',
@@ -404,6 +532,101 @@ const AUGUST_TOOLS = [
     {
         type: 'function',
         function: {
+            name: 'august__remember',
+            description: 'Stores a durable fact in AUGUST\'s semantic memory. Use for user preferences, personal details, project rules, or workflow conventions that should persist across sessions.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    key: { type: 'string', description: 'A unique identifier for this fact (e.g. "prefers_dark_mode", "name", "project_foo_stack").' },
+                    value: { type: 'string', description: 'The fact content to remember.' },
+                    category: { type: 'string', enum: ['user_preference', 'user_detail', 'project_info', 'workflow_rule', 'session_temp'], description: 'Category for this fact.' },
+                    ttl_days: { type: 'number', description: 'Optional TTL in days. null = permanent. session_temp defaults to 1 day, project_info defaults to 90 days.' }
+                },
+                required: ['key', 'value']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'august__forget',
+            description: 'Permanently removes a fact from AUGUST\'s semantic memory by its key.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    key: { type: 'string', description: 'The key of the fact to forget.' }
+                },
+                required: ['key']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'august__recall',
+            description: 'Searches AUGUST\'s semantic memory for facts matching the query text. Returns matching facts ranked by relevance.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    query: { type: 'string', description: 'Search text to match against fact keys, values, and categories.' }
+                },
+                required: ['query']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'august__list_facts',
+            description: 'Lists all active (non-expired) semantic memory facts, optionally filtered by category or source.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    category: { type: 'string', enum: ['user_preference', 'user_detail', 'project_info', 'workflow_rule', 'session_temp'], description: 'Optional category filter.' },
+                    source: { type: 'string', description: 'Optional source client filter (e.g. claude-code, hermes).' }
+                }
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'august__call_specialist',
+            description: 'Calls a specialized AI model for a focused task (coding, research, analysis) and returns its response. Use this when the task requires a model optimized for a specific domain.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    specialty: {
+                        type: 'string',
+                        enum: ['coding', 'research', 'analysis'],
+                        description: 'Which specialist to invoke.'
+                    },
+                    task: { type: 'string', description: 'The task description or prompt to send to the specialist.' }
+                },
+                required: ['specialty', 'task']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'august__supermemory',
+            description: 'Access the Supermemory knowledge graph to store or retrieve durable cross-session memories, documents, and structured knowledge.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    action: { type: 'string', enum: ['store', 'search', 'list'], description: 'What to do with supermemory.' },
+                    content: { type: 'string', description: 'Content to store (required for store action).' },
+                    query: { type: 'string', description: 'Search query (required for search action).' },
+                    type: { type: 'string', description: 'Document type for storage (e.g. note, code_snippet, specification).' }
+                },
+                required: ['action']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
             name: 'august__spawn_background_task',
             description: 'Spawns a detached PowerShell script that will run in the background indefinitely. Use this for massive scraping jobs, long compiles, or starting watcher servers. The output is streamed to august_background.log',
             parameters: {
@@ -415,6 +638,41 @@ const AUGUST_TOOLS = [
                     }
                 },
                 required: ['script_content']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'august__spawn_subagent',
+            description: 'Spawns a focused sub-agent to autonomously complete a complex multi-step task. The sub-agent has access to MCP servers, web search/fetch, and file operations. It runs its own reasoning loop and reports back. Use this for tasks that deserve focused attention — research, code generation, debugging, data analysis. The sub-agent\'s results are returned as text.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    task: {
+                        type: 'string',
+                        description: 'The detailed task for the sub-agent. Include context, what tools to use, what to look for, and the expected output format.'
+                    }
+                },
+                required: ['task']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'august__learn_subagent',
+            description: 'Scans all clients passing through the proxy (Claude Desktop, Claude Code, Cline, Cursor, VS Code, custom APIs) to discover how they spawn and manage sub-agents. Extracts patterns, compares against your current strategy, and upgrades if a better approach is found. Call this when you want to improve your sub-agent spawning strategy.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    mode: {
+                        type: 'string',
+                        enum: ['auto', 'learn_only', 'report'],
+                        description: 'auto = scan, compare, and upgrade if better. learn_only = scan and store patterns without upgrading. report = just return a summary of what is known.'
+                    }
+                },
+                required: []
             }
         }
     }
@@ -615,6 +873,416 @@ async function executeAugustToolCall(toolName, args) {
                 return `Background task successfully spawned (PID: ${child.pid}). The script is now running independently and its output is streaming into august_background.log. The temporary script file will be auto-deleted in 2 seconds. You can continue interacting with the user immediately.`;
             }
 
+            case 'august__remember':
+                const sm = require('./semantic-memory');
+                const cat = args.category || 'user_preference';
+                const ttl = args.ttl_days !== undefined ? args.ttl_days : null;
+                sm.setFact(args.key, args.value, cat, ttl, 'august');
+                return `Remembered: "${args.key}" = "${args.value}" (category: ${cat})`;
+
+            case 'august__forget': {
+                const sm2 = require('./semantic-memory');
+                const found = sm2.deleteFact(args.key);
+                return found
+                    ? `Forgotten fact: "${args.key}".`
+                    : `No fact found with key "${args.key}".`;
+            }
+
+            case 'august__recall': {
+                const sm3 = require('./semantic-memory');
+                const results = sm3.searchFacts(args.query);
+                if (results.length === 0) return `No matching facts found for: "${args.query}".`;
+                return '[Semantic Memory Results]\n' + results.map(f =>
+                    `- ${f.key}: ${f.value} [${f.category}]${f.source ? ` (from ${f.source})` : ''}`
+                ).join('\n');
+            }
+
+            case 'august__list_facts': {
+                const sm4 = require('./semantic-memory');
+                let facts;
+                if (args.category) facts = sm4.getFactsByCategory(args.category);
+                else if (args.source) facts = sm4.getFactsBySource(args.source);
+                else facts = sm4.getAllFacts();
+                if (facts.length === 0) return 'No semantic memory facts found.';
+                const label = args.category ? `category="${args.category}"` : args.source ? `source="${args.source}"` : 'all';
+                return `[Semantic Memory Facts (${label})]\n` + facts.map(f =>
+                    `- ${f.key}: ${f.value} [${f.category}]${f.source ? ` (from ${f.source})` : ''}${f.ttl ? ` (expires: ${f.ttl})` : ''}`
+                ).join('\n');
+            }
+
+            case 'august__call_specialist':
+                const { getConfig, getProfile } = require('./config');
+                const cfgSpecial = getConfig();
+                const endpoints = cfgSpecial.specialistEndpoints || {};
+                const ep = endpoints[args.specialty];
+                if (!ep) return `No specialist endpoint configured for "${args.specialty}". Available: ${Object.keys(endpoints).join(', ')}`;
+
+                const specPayload = {
+                    model: ep.model || 'MiniMax-M2.7',
+                    messages: [{ role: 'user', content: args.task }],
+                    max_tokens: ep.maxTokens || 4096
+                };
+                const specHeaders = { 'Content-Type': 'application/json' };
+                if (ep.apiKey) specHeaders['Authorization'] = `Bearer ${ep.apiKey}`;
+
+                const specResponse = await fetch(ep.url, {
+                    method: 'POST',
+                    headers: specHeaders,
+                    body: JSON.stringify(specPayload),
+                    signal: AbortSignal.timeout(ep.timeoutMs || 120000)
+                });
+                if (!specResponse.ok) {
+                    const errText = await specResponse.text().catch(() => '');
+                    return `Specialist "${args.specialty}" returned HTTP ${specResponse.status}: ${errText.slice(0, 300)}`;
+                }
+                const specData = await specResponse.json();
+                const specReply = specData.choices?.[0]?.message?.content || specData.content?.[0]?.text || '(no content)';
+                return `[Specialist: ${args.specialty}]\n${specReply}`;
+
+            case 'august__supermemory': {
+                const { getConfig: getCfg2 } = require('./config');
+                const superCfg = getCfg2();
+                const apiKey = superCfg.supermemoryApiKey || process.env.SUPERMEMORY_API_KEY;
+                if (!apiKey) return `Supermemory is not configured. Set SUPERMEMORY_API_KEY in .env or config.`;
+
+                const superUrl = superCfg.supermemoryUrl || 'https://supermemory.ai/api';
+                const supHeaders = {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${apiKey}`
+                };
+
+                switch (args.action) {
+                    case 'store': {
+                        if (!args.content) return 'Content is required for store action.';
+                        const storeRes = await fetch(`${superUrl}/documents`, {
+                            method: 'POST',
+                            headers: supHeaders,
+                            body: JSON.stringify({
+                                content: args.content,
+                                type: args.type || 'note'
+                            }),
+                            signal: AbortSignal.timeout(15000)
+                        });
+                        if (!storeRes.ok) return `Supermemory store failed: HTTP ${storeRes.status}`;
+                        const storeData = await storeRes.json();
+                        return `Stored in Supermemory. ID: ${storeData.id || storeData.documentId || 'ok'}`;
+                    }
+                    case 'search': {
+                        if (!args.query) return 'Query is required for search action.';
+                        const searchRes = await fetch(`${superUrl}/search?q=${encodeURIComponent(args.query)}`, {
+                            headers: supHeaders,
+                            signal: AbortSignal.timeout(15000)
+                        });
+                        if (!searchRes.ok) return `Supermemory search failed: HTTP ${searchRes.status}`;
+                        const searchData = await searchRes.json();
+                        const results = searchData.results || searchData.data || [];
+                        if (results.length === 0) return 'No results from Supermemory.';
+                        return '[Supermemory Results]\n' + results.slice(0, 5).map((r, i) =>
+                            `[${i + 1}] ${r.title || r.content?.slice(0, 100) || '(untitled)'}`
+                        ).join('\n');
+                    }
+                    case 'list': {
+                        const listRes = await fetch(`${superUrl}/documents`, {
+                            headers: supHeaders,
+                            signal: AbortSignal.timeout(15000)
+                        });
+                        if (!listRes.ok) return `Supermemory list failed: HTTP ${listRes.status}`;
+                        const listData = await listRes.json();
+                        const docs = listData.documents || listData.data || [];
+                        if (docs.length === 0) return 'No documents in Supermemory.';
+                        return '[Supermemory Documents]\n' + docs.slice(0, 10).map((d, i) =>
+                            `[${i + 1}] ${d.title || d.content?.slice(0, 80) || '(untitled)'} (ID: ${d.id})`
+                        ).join('\n');
+                    }
+                    default:
+                        return `Unknown supermemory action: ${args.action}. Use store, search, or list.`;
+                }
+            }
+
+            case 'august__spawn_subagent': {
+                const subCfg = loadSubagentConfig();
+                const strategy = subCfg.current;
+                const { getProfile: getProfileForSub } = require('./config');
+                const subProfile = getProfileForSub('claude') || getProfileForSub('codex') || {};
+                const subTargetUrl = subProfile.targetUrl;
+                const subApiKey = subProfile.apiKey;
+                const subModel = subProfile._upstreamModel || subProfile.currentModel || 'claude-opus-4-6';
+
+                if (!subTargetUrl) return '[Error] No upstream provider configured for sub-agent.';
+
+                const subPrompt = `${strategy.system_prompt}\n\nTASK: ${args.task}`;
+                const subTools = buildSubAgentToolDefinitions();
+                const subMessages = [{ role: 'user', content: args.task }];
+                let subFinalText = '';
+                let subLoops = 0;
+                let subError = false;
+                const subStartTime = Date.now();
+
+                while (subLoops < strategy.max_loops) {
+                    subLoops++;
+                    try {
+                        const isAnthropic = subTargetUrl.includes('anthropic') || subTargetUrl.includes('/v1/messages');
+                        let body, headers;
+                        if (isAnthropic) {
+                            headers = { 'Content-Type': 'application/json', 'x-api-key': subApiKey || '', 'anthropic-version': '2023-06-01' };
+                            if (subApiKey) headers['Authorization'] = `Bearer ${subApiKey}`;
+                            body = JSON.stringify({
+                                model: subModel,
+                                max_tokens: 8192,
+                                system: subPrompt,
+                                messages: subMessages,
+                                tools: toolsToAnthropicFormat(subTools)
+                            });
+                        } else {
+                            headers = { 'Content-Type': 'application/json' };
+                            if (subApiKey) headers['Authorization'] = `Bearer ${subApiKey}`;
+                            body = JSON.stringify({
+                                model: subModel,
+                                max_tokens: 8192,
+                                messages: [{ role: 'system', content: subPrompt }, ...subMessages],
+                                tools: subTools,
+                                stream: false
+                            });
+                        }
+
+                        const subRes = await fetch(subTargetUrl, {
+                            method: 'POST', headers, body,
+                            signal: AbortSignal.timeout(180000)
+                        });
+                        const subRaw = await subRes.text();
+                        if (!subRes.ok) {
+                            subFinalText = `[Sub-agent upstream error: ${subRaw.slice(0, 300)}]`;
+                            subError = true;
+                            break;
+                        }
+
+                        const subData = JSON.parse(subRaw);
+                        let blocks;
+                        if (isAnthropic) {
+                            blocks = Array.isArray(subData.content) ? subData.content : [];
+                        } else {
+                            const msg = subData.choices?.[0]?.message || {};
+                            const content = msg.content || '';
+                            const toolCalls = msg.tool_calls || [];
+                            blocks = [];
+                            if (content) blocks.push({ type: 'text', text: content });
+                            toolCalls.forEach(tc => {
+                                blocks.push({
+                                    type: 'tool_use',
+                                    id: tc.id,
+                                    name: tc.function?.name || tc.name,
+                                    input: (() => { try { return JSON.parse(tc.function?.arguments || '{}'); } catch(e) { return {}; } })()
+                                });
+                            });
+                        }
+
+                        const textBlocks = blocks.filter(b => b.type === 'text');
+                        if (textBlocks.length) subFinalText = textBlocks.map(b => b.text || '').join('\n');
+                        subMessages.push({ role: 'assistant', content: blocks });
+
+                        const toolUses = blocks.filter(b => b.type === 'tool_use');
+                        if (!toolUses.length) break;
+
+                        const toolResults = [];
+                        for (const tu of toolUses) {
+                            try {
+                                const result = await executeSubAgentTool(tu.name, tu.input || {});
+                                toolResults.push({
+                                    type: 'tool_result',
+                                    tool_use_id: tu.id,
+                                    content: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+                                    is_error: false
+                                });
+                            } catch (e) {
+                                toolResults.push({
+                                    type: 'tool_result',
+                                    tool_use_id: tu.id,
+                                    content: `[Sub-agent Tool Error] ${e.message}`,
+                                    is_error: true
+                                });
+                            }
+                        }
+                        subMessages.push({ role: 'user', content: toolResults });
+                    } catch (e) {
+                        subFinalText = `[Sub-agent error at loop ${subLoops}]: ${e.message}`;
+                        subError = true;
+                        break;
+                    }
+                }
+
+                const elapsed = Date.now() - subStartTime;
+                subCfg.metadata.total_spawns++;
+                if (!subError) subCfg.metadata.total_successes++;
+                const curScore = subCfg.current.score;
+                const n = curScore.total_runs;
+                const newN = n + 1;
+                const successVal = subError ? 0 : 1;
+                curScore.completion_rate = ((curScore.completion_rate * n) + successVal) / newN;
+                curScore.avg_loops = ((curScore.avg_loops * n) + subLoops) / newN;
+                curScore.error_rate = ((curScore.error_rate * n) + (subError ? 1 : 0)) / newN;
+                curScore.total_runs = newN;
+                curScore.last_run = new Date().toISOString();
+                saveSubagentConfig(subCfg);
+
+                const status = subError ? 'errored' : 'completed';
+                const summary = `[August Sub-agent] (${status}, ${subLoops} loop${subLoops > 1 ? 's' : ''}, ${elapsed}ms)${subError ? '\n' + subFinalText : '\n' + subFinalText}`;
+                return summary;
+            }
+
+            case 'august__learn_subagent': {
+                const mode = args.mode || 'auto';
+                const cfg = loadSubagentConfig();
+                const reportLines = ['[August Sub-agent Learning Report]'];
+                reportLines.push(`Mode: ${mode}\n`);
+
+                // Read the request log
+                const REQUEST_LOG_PATH = path.join(__dirname, '..', '..', 'request-log.json', 'log.json');
+                let entries = [];
+                try {
+                    const raw = fs.readFileSync(REQUEST_LOG_PATH, 'utf8');
+                    entries = JSON.parse(raw);
+                } catch (e) {
+                    reportLines.push(`Could not read request log: ${e.message}`);
+                    if (mode !== 'report') {
+                        reportLines.push('\n[Learning skipped — request log unavailable]');
+                    }
+                    return reportLines.join('\n');
+                }
+
+                if (!Array.isArray(entries) || entries.length === 0) {
+                    reportLines.push('No request log entries found.');
+                    return reportLines.join('\n');
+                }
+
+                // Scan the last 1000 entries
+                const scanSize = Math.min(entries.length, 1000);
+                const recent = entries.slice(-scanSize);
+                reportLines.push(`Scanning ${scanSize} request log entries across all clients...\n`);
+
+                // Detect unique client types
+                const clientTypes = new Set();
+                const subagentPatterns = [];
+                recent.forEach(entry => {
+                    const body = (() => { try { return JSON.parse(entry.requestBody || '{}'); } catch(e) { return {}; } })();
+                    const resp = (() => { try { return JSON.parse(entry.responseBody || '{}'); } catch(e) { return {}; } })();
+                    const headers = (() => { try { return JSON.parse(entry.requestHeaders || '{}'); } catch(e) { return {}; } })();
+                    const client = headers['anthropic-client'] || headers['user-agent'] || body.client || 'unknown';
+                    clientTypes.add(client);
+
+                    // Look for sub-agent patterns in system prompts
+                    const systemContent = body.system || '';
+                    const sysStr = typeof systemContent === 'string' ? systemContent : JSON.stringify(systemContent);
+                    if (sysStr && (sysStr.includes('sub-agent') || sysStr.includes('subagent') || sysStr.includes('sub_agent') || sysStr.includes('delegate') || sysStr.includes('spawn sub'))) {
+                        subagentPatterns.push({
+                            client,
+                            source: 'system_prompt',
+                            snippet: sysStr.slice(0, 500),
+                            timestamp: entry.timestamp || entry.createdAt || new Date().toISOString()
+                        });
+                    }
+
+                    // Look for sub-agent patterns in tool definitions
+                    const tools = Array.isArray(body.tools) ? body.tools : [];
+                    tools.forEach(t => {
+                        const tName = t.function?.name || t.name || '';
+                        if (tName.includes('subagent') || tName.includes('sub_agent') || tName.includes('delegate') || tName.includes('fork') || tName.includes('spawn')) {
+                            subagentPatterns.push({
+                                client,
+                                source: `tool_definition:${tName}`,
+                                snippet: t.function?.description || t.description || '',
+                                timestamp: entry.timestamp || entry.createdAt || new Date().toISOString()
+                            });
+                        }
+                    });
+
+                    // Look for sub-agent tool call patterns in response
+                    const respContent = Array.isArray(resp.content) ? resp.content : [];
+                    respContent.forEach(block => {
+                        if (block.type === 'tool_use' && (block.name.includes('subagent') || block.name.includes('sub_agent') || block.name.includes('delegate') || block.name.includes('spawn'))) {
+                            subagentPatterns.push({
+                                client,
+                                source: `tool_call:${block.name}`,
+                                snippet: JSON.stringify(block.input || {}).slice(0, 300),
+                                timestamp: entry.timestamp || entry.createdAt || new Date().toISOString()
+                            });
+                        }
+                    });
+                });
+
+                reportLines.push(`Client types detected: ${[...clientTypes].join(', ')}`);
+                reportLines.push(`Sub-agent patterns found: ${subagentPatterns.length}\n`);
+
+                // Store observed patterns
+                const existingSources = new Set(cfg.observed_patterns.map(p => `${p.source}|${p.client}`));
+                subagentPatterns.forEach(p => {
+                    const key = `${p.source}|${p.client}`;
+                    if (!existingSources.has(key)) {
+                        cfg.observed_patterns.push(p);
+                        existingSources.add(key);
+                    }
+                });
+
+                if (subagentPatterns.length === 0) {
+                    reportLines.push('No sub-agent patterns found in recent request log entries.');
+                    reportLines.push('Your current strategy remains active.');
+                    if (mode === 'auto') reportLines.push('\nNo upgrade needed — no patterns discovered to learn from.');
+                    saveSubagentConfig(cfg);
+                    return reportLines.join('\n');
+                }
+
+                // Show discovered patterns
+                reportLines.push('Discovered patterns:');
+                subagentPatterns.slice(0, 10).forEach((p, i) => {
+                    reportLines.push(`\n[${i + 1}] Client: ${p.client}`);
+                    reportLines.push(`    Source: ${p.source}`);
+                    reportLines.push(`    Snippet: ${p.snippet.slice(0, 200)}`);
+                    if (p.timestamp) reportLines.push(`    Seen: ${p.timestamp}`);
+                });
+                if (subagentPatterns.length > 10) reportLines.push(`\n... and ${subagentPatterns.length - 10} more patterns`);
+
+                if (mode === 'learn_only' || mode === 'report') {
+                    saveSubagentConfig(cfg);
+                    reportLines.push(`\nMode is "${mode}" — strategy unchanged.`);
+                    return reportLines.join('\n');
+                }
+
+                // Auto mode: generate candidate strategy from discovered patterns
+                // Extract the most common patterns and build an improved strategy
+                const bestPattern = subagentPatterns.reduce((best, p) => {
+                    return (p.snippet.length > (best?.snippet.length || 0)) ? p : best;
+                }, subagentPatterns[0]);
+
+                const prevStrategy = cfg.current;
+                const newStrategy = {
+                    name: `learned_${new Date().toISOString().slice(0, 10)}`,
+                    system_prompt: bestPattern.snippet.length > 100
+                        ? bestPattern.snippet
+                        : prevStrategy.system_prompt,
+                    max_loops: prevStrategy.max_loops,
+                    score: { completion_rate: 0, avg_loops: 0, total_runs: 0, error_rate: 0 },
+                    source: bestPattern.client,
+                    created: new Date().toISOString(),
+                    derived_from: bestPattern.source
+                };
+
+                // Keep the old strategy in history
+                cfg.history.push({ ...prevStrategy, retired: new Date().toISOString() });
+                if (cfg.history.length > 20) cfg.history = cfg.history.slice(-20);
+
+                cfg.current = newStrategy;
+                cfg.metadata.last_learning_at = new Date().toISOString();
+                cfg.metadata.total_learnings++;
+                saveSubagentConfig(cfg);
+
+                reportLines.push(`\n[Upgrade Applied]`);
+                reportLines.push(`Previous strategy "${prevStrategy.name}" archived.`);
+                reportLines.push(`New strategy "${newStrategy.name}" activated (source: ${bestPattern.client}).`);
+                reportLines.push(`System prompt length: ${newStrategy.system_prompt.length} chars.`);
+                reportLines.push(`\nAugust can call august__learn_subagent again anytime to scan for newer patterns.`);
+
+                return reportLines.join('\n');
+            }
+
             default:
                 throw new Error(`Unknown august tool: ${toolName}`);
         }
@@ -629,5 +1297,8 @@ module.exports = {
     executeAugustToolCall,
     readAugustCoreMemory,
     writeAugustCoreMemory,
-    renderAugustCoreMemory
+    renderAugustCoreMemory,
+    loadSubagentConfig,
+    saveSubagentConfig,
+    subagentConfigToContextBlock
 };

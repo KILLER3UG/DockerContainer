@@ -75,6 +75,54 @@ function buildCandidateUrls(inputUrl) {
     ].filter(Boolean)));
 }
 
+function getBrowserUseRecipe(url, { enableMcp = false } = {}) {
+    const parsed = new URL(normalizeUrl(url));
+    if (parsed.hostname !== 'github.com') return null;
+    const [owner, repo] = parsed.pathname.split('/').filter(Boolean);
+    if (owner !== 'browser-use' || String(repo || '').replace(/\.git$/i, '') !== 'browser-use') return null;
+
+    const sourceUrl = 'https://github.com/browser-use/browser-use';
+    const mcpServer = normalizeMcpImport({
+        name: 'browser-use',
+        command: 'uvx',
+        args: ['--from', 'browser-use[cli]', 'browser-use', '--mcp'],
+        enabled: enableMcp,
+        timeoutMs: 60000
+    }, { enableMcp });
+
+    const skill = {
+        name: 'browser-use-repair',
+        description: 'Diagnose and repair Browser Use MCP imports and Chromium setup.',
+        trigger: 'Use when a Browser Use import resolves with MCP servers: none, the browser-use MCP server is not running, Chromium is missing, or the CLI addon is missing.',
+        instructions: [
+            'When Browser Use was imported but no MCP server is visible, treat it as an import/installation problem, not as unavailable browser automation.',
+            'First import https://github.com/browser-use/browser-use through mcp__cowork__import_capability_link with enable_mcp=true, or ask the user to enable the saved browser-use MCP server in the MCP & Skills dashboard.',
+            'The expected MCP command is: uvx --from browser-use[cli] browser-use --mcp.',
+            'If startup reports that Chromium or Chrome is missing, install it with: uvx --from browser-use[cli] browser-use install.',
+            'If startup reports "CLI addon is not installed", keep the --from browser-use[cli] form; plain uvx browser-use --mcp can miss the CLI extra.',
+            'After changing the MCP config or installing Chromium, restart MCP servers from the dashboard and retry the Browser Use task.',
+            'If running inside Claude Code or Codex with shell access, diagnose with PowerShell commands such as Get-Command uvx and uvx --from browser-use[cli] browser-use --help before declaring failure.'
+        ].join('\n'),
+        enabled: true
+    };
+
+    return {
+        sourceUrl,
+        resolvedUrl: `${sourceUrl}#known-browser-use-mcp-recipe`,
+        attemptedUrls: [sourceUrl],
+        skills: [skill],
+        mcpServers: [mcpServer],
+        plugins: [{
+            name: 'browser-use',
+            description: 'Browser Use MCP server and repair guidance for local browser automation.',
+            sourceUrl,
+            skills: [skill],
+            mcpServers: [mcpServer],
+            enabled: true
+        }]
+    };
+}
+
 async function fetchText(url) {
     const response = await fetch(url, {
         headers: { 'User-Agent': USER_AGENT, 'Accept': 'application/json,text/markdown,text/plain,*/*' },
@@ -241,6 +289,9 @@ function dedupeByName(items) {
 }
 
 async function resolveCapabilityFromLink(url, options = {}) {
+    const knownRecipe = getBrowserUseRecipe(url, options);
+    if (knownRecipe) return knownRecipe;
+
     const candidates = buildCandidateUrls(url);
     const errors = [];
     for (const candidate of candidates) {
@@ -284,6 +335,7 @@ async function importCapabilityLink({ url, enableMcp = false } = {}) {
 module.exports = {
     analyzeCapabilityText,
     buildCandidateUrls,
+    getBrowserUseRecipe,
     importCapabilityLink,
     resolveCapabilityFromLink
 };

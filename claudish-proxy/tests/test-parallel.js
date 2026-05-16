@@ -110,13 +110,15 @@ async function testClaudeToolFlow() {
         return { passed: false, error: 'Turn 1 did not return tool_use' };
     }
 
-    // Verify tool IDs are in correct format
+    // Verify tool IDs are present and round-trippable. Upstreams may emit
+    // Claude-native toolu_* IDs or OpenAI-shaped call_* IDs; both are valid once
+    // the proxy can send them back as tool_result.tool_use_id.
     const toolUses = msg1.content.filter(c => c.type === 'tool_use');
     console.log(`Found ${toolUses.length} tool call(s)`);
     for (const tu of toolUses) {
-        if (!tu.id || !tu.id.startsWith('toolu_')) {
-            console.log('⚠ Invalid tool_use ID format:', tu.id);
-            return { passed: false, error: 'Invalid tool_use ID format' };
+        if (!tu.id || typeof tu.id !== 'string' || tu.id.length < 4) {
+            console.log('⚠ Invalid tool_use ID:', tu.id);
+            return { passed: false, error: 'Invalid tool_use ID' };
         }
     }
 
@@ -384,7 +386,7 @@ async function testCodexToolFlow() {
         console.log(`Codex test:  ${codexResult.passed ? '✅ PASSED' : '❌ FAILED'} ${codexResult.elapsed ? `(${codexResult.elapsed}ms)` : ''}`);
         if (!codexResult.passed) console.log('  Error:', codexResult.error);
         console.log(`Total wall time: ${overallElapsed}ms`);
-        console.log(`Parallel speedup: ~${Math.round((claudeResult.elapsed || 0 + codexResult.elapsed || 0) / Math.max(overallElapsed, 1))}x`);
+        console.log(`Parallel speedup: ~${Math.round(((claudeResult.elapsed || 0) + (codexResult.elapsed || 0)) / Math.max(overallElapsed, 1))}x`);
         console.log('============================================\n');
 
         if (!claudeResult.passed || !codexResult.passed) {

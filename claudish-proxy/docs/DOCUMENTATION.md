@@ -7,13 +7,16 @@
 3. [Getting API Keys (Step-by-Step)](#getting-api-keys-step-by-step)
 4. [Installation & Setup](#installation--setup)
 5. [Creating Launch Scripts](#creating-launch-scripts)
+   - [Ubuntu / WSL Launch](#ubuntu--wsl-launch)
 6. [Using with Claude Code](#using-with-claude-code)
 7. [Using with OpenAI Codex](#using-with-openai-codex)
 8. [Using with Cline / Other Tools](#using-with-cline--other-tools)
 9. [Web UI Guide](#web-ui-guide)
+   - [AI Workbench Tab](#ai-workbench-tab)
 10. [Custom Provider Setup](#custom-provider-setup)
 11. [Advanced Features](#advanced-features)
 12. [Troubleshooting](#troubleshooting)
+13. [Changelog](#changelog)
 
 ---
 
@@ -1146,6 +1149,35 @@ node launch.js codex
 
 **Note:** `launch.js` requires Node.js to be installed.
 
+### Ubuntu / WSL Launch
+
+The `.bat` files are Windows-only. On Ubuntu or WSL:
+
+**Option 1 — Direct env vars (no script needed):**
+```bash
+# Install Claude Code CLI first
+npm install -g @anthropic-ai/claude-code
+
+# Point it at the Windows proxy
+ANTHROPIC_BASE_URL=http://192.168.1.X:8085/v1 \
+ANTHROPIC_API_KEY=lm-studio \
+claude --model claude-opus-4-6
+```
+Replace `192.168.1.X` with your Windows machine's LAN IP.
+
+**Option 2 — Shell script:**
+```bash
+#!/usr/bin/env bash
+# Save as ~/bin/claude-local, then chmod +x
+CLAUDISH_PROXY_URL="${CLAUDISH_PROXY_URL:-http://192.168.1.X:8085}"
+node /path/to/claudish-proxy/src/launch.js claude "$@"
+```
+
+**Option 3 — WSL alias (in `~/.bashrc` or `~/.zshrc`):**
+```bash
+alias claude-local='ANTHROPIC_BASE_URL=http://$(cat /etc/resolv.conf | grep nameserver | awk "{print \$2}"):8085/v1 ANTHROPIC_API_KEY=lm-studio claude --model claude-opus-4-6'
+```
+
 ---
 
 ## Using with Claude Code
@@ -1829,7 +1861,28 @@ const FALLBACK_MODELS = [
 ];
 ```
 
-#### Cline / Agent Configuration Panel
+#### AI Workbench Tab
+
+The top navigation has a **Workbench** tab (`#section-workbench`) — a full-screen chat interface similar to Claude Desktop. Unlike the Overview tab (which inspects past requests), the Workbench lets you send messages directly to the model and see results in real time.
+
+**Features:**
+- Provider selector (Claude / Codex) to choose which upstream to use
+- Chat history preserved across turns during the session
+- Plan approval gate — the model proposes a plan, and you approve or reject before tool execution begins
+- Content block rendering for thinking, tool calls, and sub-agent results
+
+**Content blocks rendered inline:**
+- **Thinking blocks** — collapsible cards with timestamp, showing the model's reasoning
+- **Tool calls** — live-updating cards showing name, input args, and status (running → done/error)
+- **Sub-agent results** — purple-gradient cards showing the task and result from `august__spawn_subagent`
+- **Regular text** — rendered as chat bubbles with Markdown support and syntax highlighting
+
+**Session management:**
+- Sessions persist in memory while the proxy runs
+- Use **New Session** to clear the current conversation
+- Use **Reset** to clear the session and plan state
+
+### Cline / Agent Configuration Panel
 
 Below the Custom Provider panel, there's a read-only panel showing:
 - The Codex profile's target URL
@@ -1852,10 +1905,55 @@ This file is kept for reference but is **not used** by the current system. `brid
 
 ### 21. The August Agentic Engine
 
-The proxy has evolved beyond a simple HTTP router into an **Agentic Middleware** by incorporating custom tools, persistent memory, and the Model Context Protocol (MCP).
+The proxy has evolved beyond a simple HTTP router into an **Agentic Middleware** by incorporating custom tools, persistent memory, the Model Context Protocol (MCP), and a self-improving sub-agent engine.
 
 #### August Tools & Security Gateway (`august-tools.js`)
 When a request passes through the `/v1/` routes, the proxy injects its own tools (e.g., `august__bash`, `august__read_file`). A strict Host Path Permission Firewall ensures the AI cannot execute commands or modify files outside of explicitly allowed directories (e.g., `C:\Users\rober\LocalFolders`).
+
+**All 19 August tools are automatically registered in both the Anthropic and OpenAI adapters** — any client (Claude Desktop, Claude Code, Cline, Cursor, Continue.dev) connected to the proxy can call them:
+
+| Tool | Purpose |
+|------|---------|
+| `august__bash` | Execute PowerShell commands (two-phase confirmation gate) |
+| `august__read_file` | Read file contents |
+| `august__write_file` | Create/overwrite files (two-phase confirmation gate) |
+| `august__core_memory_append` | Append to user profile or global context |
+| `august__core_memory_replace` | Rewrite a memory section entirely |
+| `august__remember_project` | Track an active project |
+| `august__remember_integration` | Track integration state |
+| `august__remember_event` | Log a recent event |
+| `august__remember_checkpoint` | Store a durable conversation checkpoint |
+| `august__search_past_conversations` | Semantic search of infinite memory vector DB |
+| `august__remember` | Store a fact in semantic memory |
+| `august__forget` | Remove a fact from semantic memory |
+| `august__recall` | Search semantic memory |
+| `august__list_facts` | List active semantic memory facts |
+| `august__call_specialist` | Call a specialist AI model (coding, research, analysis) |
+| `august__supermemory` | Access the Supermemory knowledge graph |
+| `august__spawn_background_task` | Spawn a detached PowerShell script |
+| `august__spawn_subagent` | Spawn a focused sub-agent to complete tasks autonomously |
+| `august__learn_subagent` | Scan all clients to discover and adopt better sub-agent strategies |
+
+#### Self-Improving Sub-Agent Engine
+
+**`august__spawn_subagent`** delegates a complex task to a focused sub-agent that:
+1. Reads the current strategy from `august_subagent_config.json` (system prompt, tool selection, max loop count)
+2. Calls the upstream model with the strategy's system prompt + managed proxy tool definitions (MCP, Web Search/Fetch)
+3. Runs a tool loop executing sub-agent tool calls via `executeSubAgentTool()` (routes to MCP or web tools)
+4. Tracks outcome (success, loops used, elapsed time) and updates the strategy score
+5. Returns the result to the main agent
+
+**`august__learn_subagent`** scans the request log for sub-agent patterns across ALL clients:
+1. Reads the last 1000 request log entries
+2. Detects client types (Claude Desktop, Claude Code, Cline, Cursor, etc.)
+3. Extracts sub-agent patterns from system prompts, tool definitions, and tool call invocations
+4. Compares the best discovered pattern against August's current strategy
+5. If the new pattern scores better, promotes it to `current` and archives the old strategy to `history`
+6. Maintains up to 20 archived strategies for rollback
+
+**Strategy scoring** tracks: completion rate, average loops per run, and error rate. Each `august__spawn_subagent` call updates these metrics automatically.
+
+**Injection into August's system prompt:** The `<august_subagent_config>` context block is injected alongside `<august_personality>` and `<august_global_context>`. It shows August its current strategy, scores, and how many patterns have been observed — prompting it to call `august__learn_subagent` when appropriate.
 
 #### Hybrid Infinite Memory (`auto-memory.js` & `vector-db.js`)
 At the end of a successful conversation turn, the proxy spawns an asynchronous background LLM call. It parses the interaction (stripping reasoning `<think>` tags) to extract persistent facts and summarize the conversation.
@@ -1882,32 +1980,117 @@ When free-tier upstream providers throw `429 Too Many Requests` or `503 Service 
 claudish-proxy/
 ├── bridge.js              # Main HTTP server & routing
 ├── launch.js              # Interactive CLI launcher
-├── ui.html                # Web dashboard
 ├── config.json            # Profile configs (mounted volume)
 ├── .env                   # API keys (Docker env file)
 ├── Dockerfile             # Node.js 20-slim image
 ├── docker-compose.yml     # Docker orchestration
-├── claude-local.bat       # Launch Claude through proxy
-├── codex-local.bat        # Launch Codex through proxy
-├── adapters/
-│   ├── anthropic.js       # /v1/messages handler (Claude)
-│   └── openai.js          # /v1/chat/completions & /v1/responses handler (Codex)
-└── utils/
-    ├── august-tools.js    # August Security Gateway, Host Tools, & Core Memory
-    ├── auto-memory.js     # Async background fact extraction & summarization
-    ├── config.js          # Config loader with caching
-    ├── inspector.js       # Request capture for debug UI
-    ├── local-web.js       # Web search capabilities
-    ├── logger.js          # Activity & request tracking
-    ├── mcp-client.js      # Dynamic MCP server connector & tool registry
-    ├── mcp-config.js      # Configuration for local MCP servers
-    ├── models.js          # Model registry & context window detection
-    ├── selfheal.js        # Error detection & fix hints
-    ├── tokens.js          # Token estimation
-    ├── upstream.js        # Rate-limit exponential backoff and retry logic
-    ├── validator.js       # Pre-flight schema validation & plan.md Execution Gate
-    └── vector-db.js       # Zero-dependency Cosine Similarity Vector Database
+├── august_core_memory.json        # August's persistent memory
+├── august_subagent_config.json    # Sub-agent strategies & learning state
+├── request-log.json               # Persisted request log for inspection
+├── docs/
+│   ├── DOCUMENTATION.md           # This file
+│   └── SETUP.md                   # Quick start guide
+├── scripts/
+│   ├── claude-local.bat           # Launch Claude through proxy (Windows)
+│   ├── codex-local.bat            # Launch Codex through proxy (Windows)
+│   └── install-global.ps1         # Add scripts to Windows PATH
+├── src/
+│   ├── bridge.js          # Main bridge entry point (loaded from scripts/)
+│   ├── launch.js          # Interactive CLI launcher
+│   ├── adapters/
+│   │   ├── anthropic.js   # /v1/messages handler (Claude)
+│   │   └── openai.js      # /v1/chat/completions & /v1/responses handler (Codex)
+│   ├── ui/
+│   │   ├── core.js        # Dashboard core (navigation, SSE, markdown, config UI)
+│   │   ├── workbench.js   # AI Workbench chat UI & content block renderers
+│   │   ├── dashboard.js   # Inspector, thinking traces, activity renderers
+│   │   ├── profiles.js    # Profile panels, cost summary, memory tools
+│   │   ├── sections.js    # Memory, MCP/skills, August/Cowork UI loaders
+│   │   └── styles.css     # All dashboard styles (chat bubbles, workbench, dark mode)
+│   └── utils/
+│       ├── august-tools.js        # August Security Gateway, Host Tools, Core Memory, Sub-agent engine
+│       ├── auto-memory.js         # Async background fact extraction & summarization
+│       ├── config.js              # Config loader with caching
+│       ├── context-builder.js     # Builds system prompt with agent context blocks
+│       ├── cowork-tools.js        # Cowork personality agent tools
+│       ├── inspector.js           # Request capture for debug UI
+│       ├── local-web.js           # Web search capabilities
+│       ├── logger.js              # Activity & request tracking
+│       ├── mcp-client.js          # Dynamic MCP server connector & tool registry
+│       ├── mcp-config.js          # Configuration for local MCP servers
+│       ├── models.js              # Model registry & context window detection
+│       ├── selfheal.js            # Error detection & fix hints
+│       ├── semantic-memory.js     # Key-value fact store with TTL
+│       ├── tokens.js              # Token estimation
+│       ├── upstream.js            # Rate-limit exponential backoff and retry logic
+│       ├── validator.js           # Pre-flight schema validation & plan.md Execution Gate
+│       ├── vector-db.js           # Zero-dependency Cosine Similarity Vector Database
+│       └── workbench.js           # Workbench session management & tool loop
 ```
+
+---
+
+## Changelog
+
+### 2026-05-16 — Self-Improving Sub-Agent Engine
+
+**New August tools:**
+- `august__spawn_subagent` — spawns a focused sub-agent to autonomously complete complex multi-step tasks. The sub-agent has access to MCP servers, web search/fetch, and file operations. Runs its own reasoning loop (up to 5 iterations by default) and reports back. Every call is scored for completion rate, loop efficiency, and error rate.
+- `august__learn_subagent` — scans the request log across **all clients** (Claude Desktop, Claude Code, Cline, Cursor, Continue.dev, custom APIs) to discover how they define and spawn sub-agents. Extracts system prompt patterns, tool definitions, and tool call structures. Compares against the current strategy and auto-upgrades if a better approach is found.
+- Archived strategies kept in `august_subagent_config.json` (up to 20). August can autonomously call `august__learn_subagent` to continuously improve.
+
+**System prompt injection:**
+- `<august_subagent_config>` context block now injected alongside `<august_personality>` and `<august_global_context>`, showing August its current strategy scores and prompting it to improve.
+
+**Workbench UI improvements:**
+- Thinking blocks now render as collapsible cards with toggle button and timestamp
+- Tool calls render as live-updating cards (pending → done/error status)
+- Sub-agent results render in dedicated purple-gradient cards
+- Events pipeline renders text, thinking, tool use, and tool results in chronological order with proper Markdown rendering
+
+### 2026-05-15 — AI Workbench
+
+- Added AI Workbench tab (`#section-workbench`) — full-screen chat interface similar to Claude Desktop
+- Workbench sessions with tool loop (up to 8 iterations), plan approval gate, and provider selection (Claude/Codex)
+- Server-side tool loop executes `executeWorkbenchTool()` for file ops, commands, MCP, August, Cowork, and web tools
+- Workbench state persisted in-memory with session ID
+- Static file serving for `/ui/*` path (HTML, CSS, JS split out from monolithic `ui.html`)
+
+### 2026-05-14 — Background Memory Extraction
+
+- `auto-memory.js` runs async background LLM summarization after each conversation turn
+- Strips `<think>` reasoning tags before extraction
+- Extracts user profile facts, project updates, integration state, and conversation checkpoints
+- Stores embedded summaries in `august_infinite_memory.json` with cosine similarity search
+- `august__search_past_conversations` queries the vector database via embedding API
+
+### 2026-05-12 — August Personality & Path Security
+
+- Introduced `august-tools.js` with 17 built-in tools (`august__bash`, `august__read_file`, `august__write_file`, etc.)
+- Host Path Permission Firewall — hard-blocks file/command access outside `C:\Users\rober\LocalFolders`
+- Two-phase confirmation gate for destructive operations (bash, write_file)
+- August personality injected into system prompt with `<august_personality>` contract
+- Core memory persistence (`august_core_memory.json`) with user profile, projects, integrations, events, checkpoints
+- Cowork personality agent added as a complementary technical collaborator
+
+### 2026-05-10 — Deterministic Tool ID Mapping
+
+- Tool ID generation changed from random UUIDs to deterministic hashes: `hash(`${turnIndex}:${toolName}:${JSON.stringify(args)}`)`
+- Solves the "missing tool result" bug where client loses track of tool IDs after compaction
+- Tool IDs survive context compaction, history truncation, and conversation resume
+
+### 2026-05-08 — Initial Release
+
+- HTTP bridge supporting Anthropic (`/v1/messages`) and OpenAI (`/v1/chat/completions`, `/v1/responses`)
+- Profile-based routing with configurable providers and models
+- SSE parsing and synthesis for streaming responses
+- Model hijacking — maps arbitrary model names to any upstream provider
+- Smart context compaction triggers at 80% of model's context window
+- Self-healing detects common errors and injects fix hints
+- Real-time Web UI with live request inspector, thinking traces, and activity log
+- Docker container with persistent volume mounts for config
+- Launch scripts (`claude-local.bat`, `codex-local.bat`) with interactive model selection
+- Test scripts for tool flow validation and parallel client testing
 
 ---
 

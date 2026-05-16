@@ -45,6 +45,7 @@ function extractAssistantText(assistantContent) {
 const fs = require('fs');
 const path = require('path');
 const debugLogPath = path.join(__dirname, 'debug.txt');
+const semanticMemory = require('./semantic-memory');
 const _origLog = console.log;
 const _origWarn = console.warn;
 
@@ -66,7 +67,7 @@ console.warn = function(...args) {
  * Fires asynchronously at the end of a successful conversation turn.
  * Extracts persistent facts from the conversation and saves them to August Core Memory.
  */
-async function extractAndSaveMemories(userMessages, assistantContent, cfg, upstreamModel) {
+async function extractAndSaveMemories(userMessages, assistantContent, cfg, upstreamModel, clientId) {
     try {
         const memory = readAugustCoreMemory();
         const currentContext = memory.global_context || "No cross-session context established.";
@@ -324,6 +325,67 @@ Respond ONLY with valid JSON in this exact format:
             console.log('[Auto-Memory] No new persistent facts found in this turn.');
         }
 
+        // ── Semantic memory extraction pass ──
+        try {
+            const lastUserText = textOnlyMessages[textOnlyMessages.length - 1]?.content || '';
+            const sourceId = clientId || 'unknown';
+            const semanticPrompt = `Extract durable semantic facts from this user message. Return ONLY valid JSON array where each item has: {"key": "short_identifier", "value": "fact text", "category": "user_preference|user_detail|project_info|workflow_rule"}. If no facts, return []. Do not include markdown formatting.`;
+            const semPayload = {
+                model: upstreamModel || 'MiniMax-M2.7',
+                messages: [
+                    { role: 'system', content: semanticPrompt },
+                    { role: 'user', content: lastUserText }
+                ],
+                max_tokens: 500,
+                temperature: 0.1
+            };
+
+            let semTargetUrl = cfg.targetUrl;
+            if (semTargetUrl.includes('/anthropic/v1/messages')) {
+                semTargetUrl = semTargetUrl.replace('/anthropic/v1/messages', '/v1/chat/completions');
+            } else if (semTargetUrl.includes('/anthropic') && !semTargetUrl.includes('/chat/completions')) {
+                semTargetUrl = semTargetUrl.replace('/v1/messages', '/v1/chat/completions');
+            }
+
+            const semHeaders = { 'Content-Type': 'application/json' };
+            if (cfg.apiKey) semHeaders['Authorization'] = `Bearer ${cfg.apiKey}`;
+
+            const semResponse = await fetch(semTargetUrl, {
+                method: 'POST',
+                headers: semHeaders,
+                body: JSON.stringify(semPayload),
+                signal: AbortSignal.timeout(15000)
+            });
+
+            if (semResponse.ok) {
+                const semData = await semResponse.json();
+                let semText = semData.choices?.[0]?.message?.content || '';
+                semText = semText.replace(/```json|```/gi, '').trim();
+                const firstB = semText.indexOf('[');
+                const lastB = semText.lastIndexOf(']');
+                if (firstB !== -1 && lastB !== -1) {
+                    semText = semText.slice(firstB, lastB + 1);
+                }
+                const semFacts = JSON.parse(semText);
+                if (Array.isArray(semFacts) && semFacts.length > 0) {
+                    for (const fact of semFacts) {
+                        if (fact.key && fact.value) {
+                            semanticMemory.setFact(
+                                fact.key,
+                                fact.value,
+                                fact.category || 'user_preference',
+                                null,
+                                sourceId
+                            );
+                        }
+                    }
+                    console.log(`[Auto-Memory] ✓ Extracted ${semFacts.length} semantic facts (source: ${sourceId})`);
+                }
+            }
+        } catch (semErr) {
+            console.log(`[Auto-Memory] Semantic extraction skipped: ${semErr.message}`);
+        }
+
     } catch (e) {
         // Log with full details so the user can diagnose why extraction is failing
         console.warn('[Auto-Memory] Background extraction failed:', e.message);
@@ -331,4 +393,4 @@ Respond ONLY with valid JSON in this exact format:
     }
 }
 
-module.exports = { extractAndSaveMemories };
+module.exports = { extractAndSaveMemories, extractTextFromContent, extractAssistantText };

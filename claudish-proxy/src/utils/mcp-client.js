@@ -1,11 +1,17 @@
 let Client = null;
 let StdioClientTransport = null;
+let StreamableHTTPClientTransport = null;
 let mcpSdkLoadError = null;
 const { spawnSync } = require('child_process');
 
 try {
     ({ Client } = require('@modelcontextprotocol/sdk/client/index.js'));
     ({ StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js'));
+    try {
+        ({ StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js'));
+    } catch (httpErr) {
+        console.warn(`[MCP] StreamableHTTPClientTransport not available: ${httpErr.message}`);
+    }
 } catch (error) {
     mcpSdkLoadError = error;
     console.warn(`[MCP] SDK unavailable; MCP servers disabled: ${error.message}`);
@@ -84,7 +90,7 @@ async function startServer(config) {
             status: 'disabled',
             enabled: false,
             source: config.source,
-            command: config.command,
+            command: config.command || config.url || '',
             args: config.args || [],
             toolCount: 0,
             error: null
@@ -93,6 +99,71 @@ async function startServer(config) {
     }
 
     console.log(`[MCP] Starting server '${config.name}'...`);
+
+    // ── URL-based (HTTP) MCP server ──
+    if (config.url) {
+        if (!StreamableHTTPClientTransport) {
+            const message = 'StreamableHTTPClientTransport not available in MCP SDK';
+            updateStatus(config.name, { status: 'error', error: message });
+            console.error(`[MCP] Failed to start '${config.name}': ${message}`);
+            return;
+        }
+        updateStatus(config.name, {
+            status: 'starting',
+            enabled: true,
+            source: config.source,
+            url: config.url,
+            toolCount: 0,
+            error: null
+        });
+
+        const transport = new StreamableHTTPClientTransport({
+            url: new URL(config.url),
+            headers: config.headers || {}
+        });
+
+        const client = new Client({
+            name: `claudish-proxy-${config.name}`,
+            version: "1.0.0"
+        }, {
+            capabilities: {}
+        });
+
+        try {
+            await withTimeout(client.connect(transport), config.timeoutMs || 15000, `MCP server '${config.name}' connect`);
+            clients.set(config.name, { client, transport });
+            console.log(`[MCP] Connected to URL-based server '${config.name}' at ${config.url}.`);
+
+            const response = await withTimeout(client.listTools(), config.timeoutMs || 15000, `MCP server '${config.name}' tool discovery`);
+            const tools = response.tools || [];
+            console.log(`[MCP] '${config.name}' provides ${tools.length} tools via HTTP.`);
+
+            tools.forEach(tool => {
+                const namespacedName = `mcp__${config.name}__${tool.name}`;
+                const toolDefinition = {
+                    type: 'function',
+                    function: {
+                        name: namespacedName,
+                        description: `[MCP: ${config.name}] ${tool.description || ''}`,
+                        parameters: tool.inputSchema
+                    }
+                };
+                toolRegistry.set(namespacedName, toolDefinition);
+            });
+            updateStatus(config.name, {
+                status: 'running',
+                url: config.url,
+                toolCount: tools.length,
+                tools: tools.map(tool => tool.name),
+                error: null
+            });
+        } catch (e) {
+            console.error(`[MCP] Failed to start URL-based server '${config.name}':`, e.message);
+            updateStatus(config.name, { status: 'error', error: e.message });
+        }
+        return;
+    }
+
     updateStatus(config.name, {
         status: 'starting',
         enabled: true,
@@ -214,6 +285,8 @@ function getMcpServerStatus() {
         source: server.source,
         command: server.command,
         args: server.args,
+        url: server.url,
+        headers: server.headers,
         cwd: server.cwd,
         timeoutMs: server.timeoutMs,
         ...(serverStatus.get(server.name) || {

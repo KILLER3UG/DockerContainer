@@ -7,15 +7,20 @@ const { getActivityLog, startRequest, endRequest, getRequestLog, getPendingReque
 const anthropicAdapter = require('./adapters/anthropic');
 const openaiAdapter = require('./adapters/openai');
 const { getMcpServerStatus, restartMcpServers, startMcpServers } = require('./utils/mcp-client');
-const { deleteMcpServer, getMcpServersForUi, saveCustomMcpServer } = require('./utils/mcp-registry');
+const { deleteMcpServer, getMcpServersForUi, saveCustomMcpServer, setMcpServerEnabled } = require('./utils/mcp-registry');
 const { deleteSkill, getSkills, saveSkill } = require('./utils/skills');
-const { deletePlugin, getPlugins } = require('./utils/plugins');
+const { deletePlugin, getPlugins, setPluginEnabled } = require('./utils/plugins');
 const { readJsonBody, sendError, sendJson } = require('./utils/http-utils');
 const { redactForDisplay } = require('./utils/redact');
 const { DEFAULT_CONTEXT_MAX_CHARS, buildSystemPromptDetails } = require('./utils/context-builder');
+const { identifyClient } = require('./utils/client-identity');
 const { executeManagedWebTool } = require('./utils/local-web');
 const { createHostFilesFolder, getCompatibilityStatus } = require('./utils/compatibility');
 const { importCapabilityLink } = require('./utils/link-importer');
+const { getCapabilityHealth } = require('./utils/health');
+const { listMemoryItems, searchMemory, updateMemoryItem } = require('./utils/memory-lifecycle');
+const { approveWorkbenchPlan, createWorkbenchSession, resetWorkbenchSession, sendWorkbenchMessage } = require('./utils/workbench');
+const hostAgent = require('./utils/host-agent');
 
 const UI_PATH = path.join(__dirname, 'ui.html');
 const TAILWIND_CSS_PATH = path.join(__dirname, 'tailwind.generated.css');
@@ -180,6 +185,20 @@ const server = http.createServer(async (req, res) => {
         return res.end(fs.readFileSync(TAILWIND_CSS_PATH, 'utf8'));
     }
 
+    // ── Serve /ui/* static files (CSS, JS) ──
+    if (req.url.startsWith('/ui/') && (req.url.endsWith('.js') || req.url.endsWith('.css')) && req.method === 'GET') {
+        const relativePath = req.url.replace(/^\/ui\//, '');
+        const filePath = path.join(__dirname, 'ui', relativePath);
+        if (fs.existsSync(filePath)) {
+            const ext = path.extname(filePath);
+            const mime = ext === '.css' ? 'text/css; charset=utf-8' : 'application/javascript; charset=utf-8';
+            res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': 'no-store' });
+            return res.end(fs.readFileSync(filePath, 'utf8'));
+        }
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+        return res.end('Not Found');
+    }
+
     if (req.url === '/ui/config' && req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify(getConfig()));
@@ -191,6 +210,50 @@ const server = http.createServer(async (req, res) => {
 
     if (req.url === '/ui/compatibility' && req.method === 'GET') {
         return sendJson(res, getCompatibilityStatus());
+    }
+
+    if (req.url === '/ui/health' && req.method === 'GET') {
+        return sendJson(res, getCapabilityHealth());
+    }
+
+    if (req.url === '/ui/workbench/session' && req.method === 'POST') {
+        try {
+            return sendJson(res, createWorkbenchSession(await readJsonBody(req)));
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url === '/ui/workbench/chat' && req.method === 'POST') {
+        try {
+            const data = await readJsonBody(req, { limitBytes: 2 * 1024 * 1024 });
+            return sendJson(res, await sendWorkbenchMessage(data));
+        } catch (e) {
+            return sendError(res, e, 500);
+        }
+    }
+
+    if (req.url === '/ui/workbench/approve' && req.method === 'POST') {
+        try {
+            const data = await readJsonBody(req);
+            return sendJson(res, approveWorkbenchPlan(data.sessionId));
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url === '/ui/workbench/reset' && req.method === 'POST') {
+        try {
+            const data = await readJsonBody(req);
+            return sendJson(res, resetWorkbenchSession(data.sessionId, data.provider));
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url === '/ui/host-agent/status' && req.method === 'GET') {
+        hostAgent.getStatus().then(status => sendJson(res, { status })).catch(() => sendJson(res, { status: 'disconnected' }));
+        return;
     }
 
     if (req.url === '/ui/host-files/folder' && req.method === 'POST') {
@@ -213,6 +276,30 @@ const server = http.createServer(async (req, res) => {
         try {
             const name = decodeURIComponent(req.url.split('/').pop());
             return sendJson(res, { ...deletePlugin(name), plugins: getPlugins() });
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url.startsWith('/ui/plugins/') && req.method === 'PATCH') {
+        try {
+            const name = decodeURIComponent(req.url.split('/').pop());
+            const data = await readJsonBody(req);
+            const plugin = setPluginEnabled(name, data.enabled !== false);
+            return sendJson(res, { plugin, plugins: getPlugins() });
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url.startsWith('/ui/plugins/') && req.url.endsWith('/refresh') && req.method === 'POST') {
+        try {
+            const parts = req.url.split('/');
+            const name = decodeURIComponent(parts[3]);
+            const plugin = getPlugins().find(item => item.name === name);
+            if (!plugin?.sourceUrl) throw new Error('Plugin has no source URL to refresh.');
+            const imported = await importCapabilityLink({ url: plugin.sourceUrl, enableMcp: false });
+            return sendJson(res, { imported, plugins: getPlugins() });
         } catch (e) {
             return sendError(res, e, 400);
         }
@@ -248,6 +335,18 @@ const server = http.createServer(async (req, res) => {
             const saved = saveCustomMcpServer(data);
             const status = await restartMcpServers(getProfile('claude')?.apiKey || '');
             return sendJson(res, { saved, status });
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url.startsWith('/ui/mcp/') && req.method === 'PATCH') {
+        try {
+            const name = decodeURIComponent(req.url.split('/').pop());
+            const data = await readJsonBody(req);
+            const saved = setMcpServerEnabled(name, data.enabled !== false);
+            const status = await restartMcpServers(getProfile('claude')?.apiKey || '');
+            return sendJson(res, { saved, status, servers: getMcpServersForUi() });
         } catch (e) {
             return sendError(res, e, 400);
         }
@@ -293,6 +392,23 @@ const server = http.createServer(async (req, res) => {
         } catch (e) {
             return sendError(res, e, 400);
         }
+    }
+
+    if (req.url === '/ui/memory/items' && req.method === 'GET') {
+        return sendJson(res, { items: listMemoryItems() });
+    }
+
+    if (req.url === '/ui/memory/items' && req.method === 'PATCH') {
+        try {
+            return sendJson(res, updateMemoryItem(await readJsonBody(req)));
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url.startsWith('/ui/memory/search') && req.method === 'GET') {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        return sendJson(res, searchMemory(url.searchParams.get('q') || ''));
     }
 
     // ── Real-time SSE stream ──
@@ -513,6 +629,24 @@ const server = http.createServer(async (req, res) => {
             console.error('[UI /ui/models] Unexpected error:', err.message);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify([])); // always respond so the UI never hangs
+        });
+        return;
+    }
+
+    if (req.url === '/ui/semantic-memory' && req.method === 'GET') {
+        const { getAllFacts, factCount } = require('./utils/semantic-memory');
+        return sendJson(res, { facts: getAllFacts(), count: factCount() });
+    }
+
+    if (req.url === '/ui/semantic-memory' && req.method === 'DELETE') {
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', () => {
+            const { deleteFact } = require('./utils/semantic-memory');
+            const { key } = JSON.parse(body);
+            if (!key) return sendError(res, new Error('key is required'), 400);
+            const deleted = deleteFact(key);
+            return sendJson(res, { deleted });
         });
         return;
     }
@@ -793,6 +927,10 @@ const server = http.createServer(async (req, res) => {
             return endRequest(reqId, { status: 'error', error: 'Blocked by Security Gateway (Invalid Key)' });
         }
         
+        // Attach client identity to request for downstream use
+        const clientId = identifyClient(req);
+        req.augustClientId = clientId;
+
         // If passed, route to the correct handler
         if (cleanPath.includes('/v1/messages/count_tokens')) {
             return anthropicAdapter.handleCountTokens(req, res, cleanPath, reqId);
@@ -822,3 +960,6 @@ const claudeProfile = getProfile('claude');
 startMcpServers(claudeProfile?.apiKey || '').catch(e => {
     console.error('[bridge] Failed to start MCP servers:', e);
 });
+
+
+

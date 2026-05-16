@@ -32,17 +32,23 @@ assert.strictEqual(normalized.env.API_KEY, '${env:CUSTOM_API_KEY}');
 const builtins = getBuiltinMcpServers();
 const fetchServer = builtins.find(server => server.name === 'fetch');
 const minimaxServer = builtins.find(server => server.name === 'minimax');
+const blenderServer = builtins.find(server => server.name === 'blender');
 assert(fetchServer, 'fetch MCP server should be built in');
+assert(blenderServer, 'blender MCP server should be built in');
 assert.strictEqual(fetchServer.command, 'uvx');
 assert.deepStrictEqual(fetchServer.args, ['mcp-server-fetch']);
 assert.strictEqual(minimaxServer.env.MINIMAX_API_KEY, '${env:MINIMAX_API_KEY}');
+assert.strictEqual(blenderServer.enabled, false, 'blender should ship disabled but toggleable');
 
 const merged = mergeMcpServers([
     { name: 'filesystem', enabled: false, command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '/tmp'] },
+    { name: 'blender', enabled: true, source: 'builtin', command: blenderServer.command, args: blenderServer.args, env: blenderServer.env },
     { name: 'extra', command: 'node', args: ['server.js'] }
 ]);
 
 assert.strictEqual(merged.find(server => server.name === 'filesystem').enabled, false);
+assert.strictEqual(merged.find(server => server.name === 'blender').enabled, true, 'builtin overrides should re-enable blender');
+assert.strictEqual(merged.find(server => server.name === 'blender').source, 'builtin', 'builtin override should preserve source');
 assert(merged.find(server => server.name === 'extra'), 'custom MCP server should be merged');
 
 console.log('SUCCESS mcp-registry');

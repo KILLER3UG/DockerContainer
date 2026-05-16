@@ -56,19 +56,52 @@ function toEnvObject(value) {
     return {};
 }
 
+function toHeadersObject(headers) {
+    if (!headers || typeof headers !== 'object') return {};
+    return Object.fromEntries(
+        Object.entries(headers)
+            .filter(([k, v]) => k && v !== undefined && v !== null)
+            .map(([k, v]) => [k, String(v)])
+    );
+}
+
 function normalizeMcpServer(raw, { source = 'custom' } = {}) {
     const name = String(raw?.name || '').trim();
     if (!MCP_NAME_PATTERN.test(name)) {
         throw new Error('MCP server name must be 1-48 characters and use only letters, numbers, underscores, or dashes.');
     }
+
+    const url = String(raw?.url || '').trim();
     const command = String(raw?.command || '').trim();
-    if (!command) throw new Error('MCP server command is required.');
+
+    if (!url && !command) {
+        throw new Error('MCP server requires either a "url" (for HTTP-based servers) or a "command" (for stdio-based servers).');
+    }
+
+    const headers = toHeadersObject(raw.headers);
+
+    if (url) {
+        try {
+            new URL(url);
+        } catch (e) {
+            throw new Error(`Invalid MCP server URL: "${url}" — must be a valid HTTP/HTTPS URL.`);
+        }
+        return {
+            name,
+            enabled: raw.enabled !== false,
+            source: raw.source || source,
+            url,
+            headers,
+            timeoutMs: Math.max(1000, Number(raw.timeoutMs || 15000) || 15000)
+        };
+    }
 
     return {
         name,
         enabled: raw.enabled !== false,
         source: raw.source || source,
         command,
+        headers,
         args: toStringArray(raw.args),
         env: toEnvObject(raw.env),
         cwd: raw.cwd ? String(raw.cwd).trim() : undefined,
@@ -126,6 +159,10 @@ function saveCustomMcpServer(data) {
         ? normalizeMcpServer(current[existingIndex], { source: current[existingIndex].source || 'custom' })
         : getMcpServers().find(server => server.name === normalized.name);
 
+    if (existing?.source === 'builtin') {
+        normalized.source = 'builtin';
+    }
+
     if (existing?.env) {
         normalized.env = Object.fromEntries(
             Object.entries(normalized.env || {}).map(([key, value]) => {
@@ -142,6 +179,29 @@ function saveCustomMcpServer(data) {
     config.mcpServers = current;
     saveConfig(config);
     return normalized;
+}
+
+function setMcpServerEnabled(name, enabled) {
+    const normalizedName = String(name || '').trim();
+    if (!MCP_NAME_PATTERN.test(normalizedName)) throw new Error('Invalid MCP server name.');
+
+    const existing = getMcpServers().find(server => server.name === normalizedName);
+    if (!existing) throw new Error(`MCP server not found: ${normalizedName}`);
+
+    const config = getConfig();
+    const current = Array.isArray(config.mcpServers) ? config.mcpServers : [];
+    const existingIndex = current.findIndex(server => server?.name === normalizedName);
+    const override = normalizeMcpServer({
+        ...existing,
+        enabled: enabled !== false,
+        source: existing.source || 'custom'
+    }, { source: existing.source || 'custom' });
+
+    if (existingIndex >= 0) current[existingIndex] = override;
+    else current.push(override);
+    config.mcpServers = current;
+    saveConfig(config);
+    return override;
 }
 
 function deleteMcpServer(name) {
@@ -174,6 +234,8 @@ module.exports = {
     mergeMcpServers,
     normalizeMcpServer,
     saveCustomMcpServer,
+    setMcpServerEnabled,
     toEnvObject,
-    toStringArray
+    toStringArray,
+    toHeadersObject
 };

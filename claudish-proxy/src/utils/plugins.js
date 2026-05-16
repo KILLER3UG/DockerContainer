@@ -57,6 +57,24 @@ function savePlugin(data) {
     return normalized;
 }
 
+function setPluginEnabled(name, enabled) {
+    const normalizedName = normalizeName(name, '');
+    if (!PLUGIN_NAME_PATTERN.test(normalizedName)) throw new Error('Invalid plugin name.');
+    const config = getConfig();
+    const current = Array.isArray(config.customPlugins) ? config.customPlugins : [];
+    const existingIndex = current.findIndex(plugin => plugin?.name === normalizedName);
+    if (existingIndex === -1) throw new Error(`Plugin not found: ${normalizedName}`);
+    const next = {
+        ...normalizePlugin(current[existingIndex]),
+        enabled: enabled !== false,
+        updatedAt: new Date().toISOString()
+    };
+    current[existingIndex] = next;
+    config.customPlugins = current;
+    saveConfig(config);
+    return next;
+}
+
 function deletePlugin(name) {
     const normalizedName = normalizeName(name, '');
     if (!PLUGIN_NAME_PATTERN.test(normalizedName)) throw new Error('Invalid plugin name.');
@@ -103,5 +121,6 @@ module.exports = {
     normalizeName,
     normalizePlugin,
     renderPluginsForSystem,
-    savePlugin
+    savePlugin,
+    setPluginEnabled
 };

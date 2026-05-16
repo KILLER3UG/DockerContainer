@@ -18,6 +18,7 @@ services:
       # Keys referenced by ${env:VAR} in config.json
       - MINIMAX_API_KEY=${MINIMAX_API_KEY}
       - NVIDIA_API_KEY=${NVIDIA_API_KEY}
+      - SUPERMEMORY_API_KEY=${SUPERMEMORY_API_KEY}
     volumes:
       # Live-mount all source code so changes take effect on container restart (no rebuild needed)
       - ./src:/app/src

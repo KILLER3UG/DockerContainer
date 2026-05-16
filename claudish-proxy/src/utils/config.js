@@ -106,9 +106,14 @@ function collapseEnvVars(resolvedConfig) {
 let cachedConfig = null;
 let cachedMtime = 0;
 const DEFAULT_CLAUDE_PUBLIC_MODEL = 'claude-opus-4-6';
+const DEFAULT_GPT_PUBLIC_MODEL = 'gpt-4o';
 
 function looksLikeClaudePublicModel(model) {
     return typeof model === 'string' && model.trim().toLowerCase().startsWith('claude-');
+}
+
+function looksLikeGptPublicModel(model) {
+    return typeof model === 'string' && model.trim().toLowerCase().startsWith('gpt-');
 }
 
 function normalizeClaudeProfile(profile) {
@@ -119,6 +124,28 @@ function normalizeClaudeProfile(profile) {
         : DEFAULT_CLAUDE_PUBLIC_MODEL;
 
     if (!looksLikeClaudePublicModel(currentModel) && currentModel) {
+        if (normalized._upstreamModel === undefined) {
+            normalized._upstreamModel = currentModel;
+        }
+        normalized.currentModel = preservedAlias;
+        return normalized;
+    }
+
+    if (!currentModel) {
+        normalized.currentModel = preservedAlias;
+    }
+
+    return normalized;
+}
+
+function normalizeGptProfile(profile) {
+    const normalized = { ...(profile || {}) };
+    const currentModel = typeof normalized.currentModel === 'string' ? normalized.currentModel.trim() : '';
+    const preservedAlias = looksLikeGptPublicModel(currentModel)
+        ? currentModel
+        : DEFAULT_GPT_PUBLIC_MODEL;
+
+    if (!looksLikeGptPublicModel(currentModel) && currentModel) {
         if (normalized._upstreamModel === undefined) {
             normalized._upstreamModel = currentModel;
         }
@@ -167,7 +194,7 @@ function saveConfig(config) {
 function getProfile(name) {
     const config = getConfig();
     if (config[name] && typeof config[name] === 'object' && config[name].targetUrl) {
-        return name === 'claude' ? normalizeClaudeProfile(config[name]) : config[name];
+        return name === 'claude' ? normalizeClaudeProfile(config[name]) : normalizeGptProfile(config[name]);
     }
     // Old flat format fallback
     const profile = {
@@ -175,7 +202,7 @@ function getProfile(name) {
         currentModel: config.currentModel,
         apiKey: config.apiKey
     };
-    return name === 'claude' ? normalizeClaudeProfile(profile) : profile;
+    return name === 'claude' ? normalizeClaudeProfile(profile) : normalizeGptProfile(profile);
 }
 
 // Get a specific field from a profile, with fallback
@@ -203,11 +230,11 @@ function saveProfile(name, profileConfig) {
     }
 
     const previousProfile = config[name] && typeof config[name] === 'object'
-        ? (name === 'claude' ? normalizeClaudeProfile(config[name]) : config[name])
+        ? (name === 'claude' ? normalizeClaudeProfile(config[name]) : normalizeGptProfile(config[name]))
         : null;
     const normalizedProfileConfig = name === 'claude'
         ? normalizeClaudeProfile(profileConfig)
-        : profileConfig;
+        : normalizeGptProfile(profileConfig);
     const previousContextModel = name === 'claude'
         ? (previousProfile?._upstreamModel || previousProfile?.currentModel)
         : previousProfile?.currentModel;
@@ -256,6 +283,27 @@ function syncClaudePublicAlias(publicAlias) {
     return config.claude;
 }
 
+function syncGptPublicAlias(publicAlias) {
+    if (!looksLikeGptPublicModel(publicAlias)) return null;
+
+    const config = getConfig();
+    const existingProfile = config.codex && typeof config.codex === 'object'
+        ? normalizeGptProfile(config.codex)
+        : normalizeGptProfile({});
+    const normalizedAlias = publicAlias.trim();
+
+    if (existingProfile.currentModel === normalizedAlias) {
+        return existingProfile;
+    }
+
+    config.codex = {
+        ...existingProfile,
+        currentModel: normalizedAlias
+    };
+    saveConfig(config);
+    return config.codex;
+}
+
 // ── Custom Provider Bookmarks ──
 function getBookmarks() {
     const config = getConfig();
@@ -288,4 +336,4 @@ function deleteBookmark(name) {
     return false;
 }
 
-module.exports = { getConfig, saveConfig, getProfile, saveProfile, syncClaudePublicAlias, getProfileField, getBookmarks, saveBookmark, deleteBookmark, CONFIG_PATH };
+module.exports = { getConfig, saveConfig, getProfile, saveProfile, syncClaudePublicAlias, syncGptPublicAlias, getProfileField, getBookmarks, saveBookmark, deleteBookmark, CONFIG_PATH };

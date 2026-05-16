@@ -1,6 +1,8 @@
-const { readAugustCoreMemory } = require('./august-tools');
+const { readAugustCoreMemory, subagentConfigToContextBlock } = require('./august-tools');
 const { renderSkillsForSystem } = require('./skills');
 const { renderPluginsForSystem } = require('./plugins');
+const { getDisplayName } = require('./client-identity');
+const semanticMemory = require('./semantic-memory');
 
 const MINIMAX_M2_7_CODING_CONTRACT = `You are an expert coding agent operating in Windows PowerShell.
 
@@ -34,6 +36,17 @@ const WINDOWS_CONTEXT = `ENVIRONMENT: You are running on Windows (PowerShell). U
 - Use Invoke-WebRequest or curl.exe for HTTP requests.
 - Do not suggest bash, sh, zsh, or WSL commands unless explicitly asked.
 - If you need to run shell commands, use PowerShell syntax.`;
+
+const AUGUST_PERSONALITY_CONTRACT = `You are AUGUST, a direct and intelligent AI assistant.
+
+Core identity:
+- Your name is AUGUST. You are helpful, competent, and efficient.
+- You address the user as "Sir" in a natural, respectful way.
+- You are concise and direct — no fluff, no unnecessary pleasantries.
+- You use a friendly but professional tone.
+- When a task is fully complete, you signal with: "Done, Sir."
+- You have access to semantic memory (august__remember/recall/forget/list_facts) for durable cross-session facts, file tools (august__read_file/write_file/bash) for working with code, and specialist routers (august__call_specialist) for domain-specific tasks.
+- You maintain continuity across sessions using core memory and semantic memory.`;
 
 const PROXY_SELF_AWARENESS_CONTRACT = `You are operating through Claudish Proxy, a local multi-provider gateway with August Brain memory.
 
@@ -343,16 +356,19 @@ function buildGlobalContextPayloadDetails(memory = readAugustCoreMemory(), optio
     return buildClaudeMemoryHierarchyDetails(memory, options);
 }
 
-function buildSystemPromptDetails(system, {
-    model,
-    targetUrl,
-    includeWindowsContext = true,
-    includeMiniMaxContract = true,
-    includeOriginalSystem = true,
-    memory = readAugustCoreMemory(),
-    skills,
-    contextMaxChars = DEFAULT_CONTEXT_MAX_CHARS
-} = {}) {
+function buildSystemPromptDetails(system, options = {}) {
+    const {
+        model,
+        targetUrl,
+        includeWindowsContext = true,
+        includeMiniMaxContract = true,
+        includeOriginalSystem = true,
+        memory = readAugustCoreMemory(),
+        skills,
+        contextMaxChars = DEFAULT_CONTEXT_MAX_CHARS,
+        clientId = 'unknown'
+    } = options;
+
     const chunks = [];
     const miniMax = isMiniMaxTarget({ model, targetUrl });
     const globalContext = buildGlobalContextPayloadDetails(memory, { maxChars: contextMaxChars });
@@ -360,6 +376,8 @@ function buildSystemPromptDetails(system, {
     if (miniMax && includeMiniMaxContract) {
         chunks.push(wrapTag('minimax_m2_7_instructions', MINIMAX_M2_7_CODING_CONTRACT));
     }
+
+    chunks.push(wrapTag('august_personality', AUGUST_PERSONALITY_CONTRACT));
 
     chunks.push(wrapTag(
         'proxy_self_awareness',
@@ -373,6 +391,12 @@ function buildSystemPromptDetails(system, {
         'format="claude_memory_hierarchy" source="august_core_memory.json"'
     ));
 
+    chunks.push(wrapTag(
+        'august_subagent_config',
+        subagentConfigToContextBlock(),
+        'source="august_subagent_config.json"'
+    ));
+
     const renderedSkills = renderSkillsForSystem(skills);
     if (renderedSkills) {
         chunks.push(wrapTag('custom_skills', renderedSkills, 'source="config.customSkills"'));
@@ -381,6 +405,24 @@ function buildSystemPromptDetails(system, {
     const renderedPlugins = renderPluginsForSystem();
     if (renderedPlugins) {
         chunks.push(wrapTag('proxy_plugins', renderedPlugins, 'source="config.customPlugins"'));
+    }
+
+    // ── Client identity injection ──
+    const displayName = getDisplayName(clientId);
+    if (clientId !== 'unknown') {
+        chunks.push(wrapTag('client_identity',
+            `This conversation is from ${displayName} (client ID: ${clientId}).\n` +
+            `Cross-platform awareness: facts learned from other clients will be available via semantic memory.`
+        ));
+    }
+
+    // ── Semantic memory facts injection (top 10 active) ──
+    const topFacts = semanticMemory.getAllFacts().slice(0, 10);
+    if (topFacts.length > 0) {
+        const factsText = topFacts.map(f =>
+            `- ${f.key}: ${f.value} [${f.category}]${f.source ? ` (from ${f.source})` : ''}`
+        ).join('\n');
+        chunks.push(wrapTag('semantic_memory', `Relevant semantic facts:\n${factsText}`, 'source="august_semantic_memory.json"'));
     }
 
     if (includeWindowsContext) {
@@ -412,6 +454,7 @@ function buildSystemBlocks(system, options = {}) {
 
 module.exports = {
     MINIMAX_M2_7_CODING_CONTRACT,
+    AUGUST_PERSONALITY_CONTRACT,
     PROXY_SELF_AWARENESS_CONTRACT,
     WINDOWS_CONTEXT,
     DEFAULT_CONTEXT_MAX_CHARS,

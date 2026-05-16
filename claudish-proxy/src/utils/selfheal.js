@@ -67,11 +67,38 @@ function detectError(content) {
         lower.includes('is not recognized') ||        // Windows command not found
         lower.includes('exited with code') ||
         lower.includes('failed with exit')
+        || (lower.includes('browser-use') && (lower.includes('mcp servers: none') || lower.includes('mcpservers: none') || lower.includes('no mcp server')))
     );
 }
 
 function buildHints(content) {
     const hints = [];
+    const lower = String(content || '').toLowerCase();
+
+    if (
+        lower.includes('browser-use') &&
+        (lower.includes('mcp servers: none') || lower.includes('mcpservers: none') || lower.includes('no mcp server'))
+    ) {
+        hints.push(
+            `[Proxy Self-Heal]: Browser Use imported without an MCP server. ` +
+            `This is usually a plugin-import shape problem, not proof that browser automation is unavailable. ` +
+            `Import https://github.com/browser-use/browser-use again with enable_mcp=true, then use the browser-use MCP recipe: ` +
+            `uvx --from browser-use[cli] browser-use --mcp. ` +
+            `If Chromium is missing, install it with: uvx --from browser-use[cli] browser-use install. ` +
+            `Restart MCP servers and retry before stopping.`
+        );
+    }
+
+    if (
+        lower.includes('browser-use') &&
+        (lower.includes('cli addon is not installed') || lower.includes('chromium') || lower.includes('chrome is missing'))
+    ) {
+        hints.push(
+            `[Proxy Self-Heal]: Browser Use setup needs the CLI extra and a browser runtime. ` +
+            `Use uvx --from browser-use[cli] browser-use --mcp for the MCP server, and run ` +
+            `uvx --from browser-use[cli] browser-use install if Chromium is missing.`
+        );
+    }
 
     // ── PRIMARY: Bash-in-Windows detection ──
     // Claude Code runs locally on Windows in PowerShell. Bash commands will fail.

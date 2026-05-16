@@ -1,6 +1,6 @@
 const { buildFriendlyRateLimitMessage, getRetryDelayMs, isRetryableStatus } = require('../utils/upstream');
 const { estimateTokens, formatTokenCount } = require('../utils/tokens');
-const { isMiniMaxModel } = require('../utils/context-builder');
+const { buildSystemBlocks, buildSystemPromptText, isMiniMaxModel } = require('../utils/context-builder');
 
 const DEFAULT_MINIMAX_TEMPERATURE = 1;
 const DEFAULT_MINIMAX_TOP_P = 0.95;
@@ -91,6 +91,14 @@ class LlmAdapterBase {
         }
 
         return compacted;
+    }
+
+    buildProviderSystemPrompt(system, options = {}) {
+        return buildSystemPromptText(system, options);
+    }
+
+    buildProviderSystemBlocks(system, options = {}) {
+        return buildSystemBlocks(system, options);
     }
 
     logContextBudget({ model, contextWindow, estimatedTokens, threshold, requestedMaxTokens }) {

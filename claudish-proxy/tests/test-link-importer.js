@@ -1,7 +1,8 @@
 const assert = require('assert');
 const {
     analyzeCapabilityText,
-    buildCandidateUrls
+    buildCandidateUrls,
+    getBrowserUseRecipe
 } = require('../src/utils/link-importer');
 
 const candidates = buildCandidateUrls('https://github.com/example/cool-mcp/tree/dev');
@@ -45,5 +46,17 @@ const markdown = analyzeCapabilityText([
 
 assert.strictEqual(markdown.skills[0].name, 'github_skill', 'frontmatter skill name should parse');
 assert(markdown.skills[0].instructions.includes('repository workflow'), 'skill markdown instructions missing');
+
+const browserUseRecipe = getBrowserUseRecipe('https://github.com/browser-use/browser-use.git', { enableMcp: true });
+assert(browserUseRecipe, 'browser-use GitHub URL should use the known MCP recipe');
+assert.strictEqual(browserUseRecipe.mcpServers.length, 1, 'browser-use recipe should include an MCP server');
+assert.strictEqual(browserUseRecipe.mcpServers[0].name, 'browser-use', 'browser-use server name should be stable');
+assert.deepStrictEqual(
+    browserUseRecipe.mcpServers[0].args,
+    ['--from', 'browser-use[cli]', 'browser-use', '--mcp'],
+    'browser-use MCP command should include the CLI extra'
+);
+assert.strictEqual(browserUseRecipe.mcpServers[0].enabled, true, 'enableMcp should enable the browser-use MCP server');
+assert(browserUseRecipe.skills[0].instructions.includes('browser-use install'), 'browser-use repair skill should mention Chromium install');
 
 console.log('SUCCESS link-importer');

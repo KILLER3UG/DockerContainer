@@ -435,14 +435,15 @@ async function executeManagedProxyTool(toolName, args) {
     throw new Error(`Unsupported managed proxy tool: ${toolName}`);
 }
 
-function buildMinimaxAwareSystem(system, targetUrl, model) {
+function buildMinimaxAwareSystem(system, targetUrl, model, clientId) {
     const backendHint = isMiniMaxModel(model) || (targetUrl && targetUrl.toLowerCase().includes('minimax'))
         ? 'MiniMax-M2.7'
         : model;
     const blocks = buildContextSystemBlocks(system, {
         model: backendHint,
         targetUrl,
-        includeWindowsContext: false
+        includeWindowsContext: false,
+        clientId: clientId || 'unknown'
     });
     const totalChars = blocks.reduce((sum, block) => sum + (block.text || '').length, 0);
     console.log(`[Proxy System Prompt]: August core injected. Total system prompt length=${totalChars} chars`);
@@ -499,7 +500,15 @@ function isBrowserAutomationToolName(name) {
 
 // ── Mid-session drift prevention ──
 // After ~50K tokens of context LLMs start ignoring system prompt rules.
-// Inject a brief rule reminder into the message stream every 10 tool-result turns.
+// Inject a brief rule reminder into the message stream every 8 tool-result turns.
+const AUGUST_REMINDER = {
+    role: 'user',
+    content: '[AUGUST] ' +
+             'Remember the AUGUST personality contract: address the user as "Sir", be direct and concise, ' +
+             'use semantic memory tools for durable facts, signal completion with "Done, Sir." ' +
+             'Continue the same reasoning chain across tool rounds.'
+};
+
 const RULE_REMINDER_MESSAGE = {
     role: 'user',
     content: '[SYSTEM REMINDER] Continue the same reasoning chain across tool rounds. ' +
@@ -517,8 +526,14 @@ function countToolResultTurns(messages) {
 
 function shouldInjectReminderMessage(messages) {
     const toolTurns = countToolResultTurns(messages);
-    // Inject after every 10 tool-result turns (but not at zero)
-    return toolTurns > 0 && toolTurns % 10 === 0;
+    // Inject after every 8 tool-result turns (but not at zero)
+    return toolTurns > 0 && toolTurns % 8 === 0;
+}
+
+function shouldInjectAugustReminder(messages) {
+    const toolTurns = countToolResultTurns(messages);
+    // Inject August personality reminder every 16 turns
+    return toolTurns > 0 && toolTurns % 16 === 0;
 }
 
 function getManagedWebLocalToolName(toolName) {
@@ -1058,12 +1073,12 @@ async function translateMessages(anthropicMessages, ctx) {
 }
 
 // ── Build OpenAI request from Anthropic request ──
-async function buildOpenAIRequest(aReq, ctx, cfg) {
+async function buildOpenAIRequest(aReq, ctx, cfg, clientId) {
     const openaiMessages = [];
     const backendModel = getClaudeBackendModel(cfg, aReq.model);
 
     // System prompt
-    const effectiveSystem = buildMinimaxAwareSystem(aReq.system, cfg.targetUrl, backendModel);
+    const effectiveSystem = buildMinimaxAwareSystem(aReq.system, cfg.targetUrl, backendModel, clientId);
     const systemPrompt = buildOpenAISystemPrompt(effectiveSystem);
     openaiMessages.push({ role: 'system', content: systemPrompt });
 
@@ -1211,24 +1226,35 @@ function buildAnthropicHeaders(apiKey) {
     return headers;
 }
 
-function buildAnthropicUpstreamRequest(aReq, cfg, upstreamModelOverride) {
+function buildAnthropicUpstreamRequest(aReq, cfg, upstreamModelOverride, clientId) {
     const upstreamReq = {
         model: upstreamModelOverride || getClaudeBackendModel(cfg, aReq.model),
         messages: Array.isArray(aReq.messages) ? aReq.messages : []
     };
 
     // Inject the M2.7 coding contract for MiniMax targets; pass through unchanged for others
-    upstreamReq.system = buildMinimaxAwareSystem(aReq.system, cfg.targetUrl, upstreamReq.model);
+    upstreamReq.system = buildMinimaxAwareSystem(aReq.system, cfg.targetUrl, upstreamReq.model, clientId);
 
-    // Mid-session drift prevention: inject a rule reminder every 10 tool-result turns
-    if (isMiniMaxModel(upstreamReq.model) && shouldInjectReminderMessage(upstreamReq.messages)) {
-        const lastIdx = upstreamReq.messages.length - 1;
-        upstreamReq.messages = [
-            ...upstreamReq.messages.slice(0, lastIdx),
-            RULE_REMINDER_MESSAGE,
-            upstreamReq.messages[lastIdx]
-        ];
-        console.log(`[Proxy Reminder]: Injected mid-session rule reminder at message index ${lastIdx}`);
+    // Mid-session drift prevention: inject rule reminders every 8 tool-result turns
+    if (isMiniMaxModel(upstreamReq.model)) {
+        if (shouldInjectAugustReminder(upstreamReq.messages)) {
+            const lastIdx = upstreamReq.messages.length - 1;
+            upstreamReq.messages = [
+                ...upstreamReq.messages.slice(0, lastIdx),
+                AUGUST_REMINDER,
+                upstreamReq.messages[lastIdx]
+            ];
+            console.log(`[Proxy Reminder]: Injected AUGUST personality reminder at message index ${lastIdx}`);
+        }
+        if (shouldInjectReminderMessage(upstreamReq.messages)) {
+            const lastIdx = upstreamReq.messages.length - 1;
+            upstreamReq.messages = [
+                ...upstreamReq.messages.slice(0, lastIdx),
+                RULE_REMINDER_MESSAGE,
+                upstreamReq.messages[lastIdx]
+            ];
+            console.log(`[Proxy Reminder]: Injected mid-session rule reminder at message index ${lastIdx}`);
+        }
     }
 
     const backendModel = upstreamModelOverride || getClaudeBackendModel(cfg, aReq.model);
@@ -1701,6 +1727,7 @@ function translateOpenAIResponse(openaiData, requestModel, ctx) {
 
 // ── Main handler for /v1/messages ──
 async function handleMessages(req, res, cleanPath, reqId) {
+    const clientId = req.augustClientId || 'unknown';
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', async () => {
@@ -1740,7 +1767,7 @@ async function handleMessages(req, res, cleanPath, reqId) {
             if (shouldUseAnthropicUpstream(cfg.targetUrl)) {
                 console.log('[Proxy] Using Anthropic-compatible upstream path');
                 const ctx = { managedLocalToolNames: new Set() };
-                let upstreamReq = buildAnthropicUpstreamRequest(aReq, cfg, upstreamModel);
+                let upstreamReq = buildAnthropicUpstreamRequest(aReq, cfg, upstreamModel, clientId);
                 
                 // Mark all proxy-managed tools for local resolution -- no provider guard.
                 // This covers web, Cowork compatibility, August memory, and running MCP servers.
@@ -1837,7 +1864,7 @@ async function handleMessages(req, res, cleanPath, reqId) {
 
                             if (parsed.stop_reason === 'end_turn') {
                                 const { extractAndSaveMemories } = require('../utils/auto-memory');
-                                extractAndSaveMemories(aReq.messages, parsed, cfg, upstreamModel).catch(() => {});
+                                extractAndSaveMemories(aReq.messages, parsed, cfg, upstreamModel, clientId).catch(() => {});
                             }
                             return; // finishRequest() runs in finally
                         }
@@ -1848,7 +1875,7 @@ async function handleMessages(req, res, cleanPath, reqId) {
                         // --- AUTO-MEMORY BACKGROUND EXTRACTION ---
                         if (parsed.stop_reason === 'end_turn') {
                             const { extractAndSaveMemories } = require('../utils/auto-memory');
-                            extractAndSaveMemories(aReq.messages, parsed, cfg, upstreamModel).catch(() => {});
+                            extractAndSaveMemories(aReq.messages, parsed, cfg, upstreamModel, clientId).catch(() => {});
                         }
                     } catch (e) {
                         console.warn('[Proxy SSE Parse Warning]: Failed to reconstruct Anthropic response for capture:', e.message);
@@ -1876,7 +1903,7 @@ async function handleMessages(req, res, cleanPath, reqId) {
                             // --- AUTO-MEMORY BACKGROUND EXTRACTION ---
                             if (parsed.stop_reason === 'end_turn') {
                                 const { extractAndSaveMemories } = require('../utils/auto-memory');
-                                extractAndSaveMemories(aReq.messages, parsed, cfg, upstreamModel).catch(() => {});
+                                extractAndSaveMemories(aReq.messages, parsed, cfg, upstreamModel, clientId).catch(() => {});
                             }
                             return; // finishRequest() runs in finally
                         }
@@ -1884,7 +1911,7 @@ async function handleMessages(req, res, cleanPath, reqId) {
                         // --- AUTO-MEMORY BACKGROUND EXTRACTION (Non-stream tool resolution case) ---
                         if (parsed.stop_reason === 'end_turn') {
                             const { extractAndSaveMemories } = require('../utils/auto-memory');
-                            extractAndSaveMemories(aReq.messages, parsed, cfg, upstreamModel).catch(() => {});
+                            extractAndSaveMemories(aReq.messages, parsed, cfg, upstreamModel, clientId).catch(() => {});
                         }
                     } catch (e) { /* ignore */ }
                 }
@@ -1897,7 +1924,7 @@ async function handleMessages(req, res, cleanPath, reqId) {
             // Per-request context isolates tool state so multiple clients can
             // call the proxy concurrently without ID collisions.
             const ctx = { lastKnownTools: [], managedLocalToolNames: new Set() };
-            const oReq = await buildOpenAIRequest(aReq, ctx, cfg);
+            const oReq = await buildOpenAIRequest(aReq, ctx, cfg, clientId);
             console.log(`[Proxy Debug Claude]: incoming_model=${aReq.model || 'unknown'} public_model=${requestModel} backend_model=${upstreamModel} target=${cfg.targetUrl || 'unknown'}`);
 
             // Capture request for debug UI
@@ -1974,7 +2001,7 @@ async function handleMessages(req, res, cleanPath, reqId) {
             // --- AUTO-MEMORY BACKGROUND EXTRACTION (OpenAI translation path) ---
             if (finishReason === 'stop') {
                 const { extractAndSaveMemories } = require('../utils/auto-memory');
-                extractAndSaveMemories(aReq.messages, data, cfg, upstreamModel).catch(() => {});
+                extractAndSaveMemories(aReq.messages, data, cfg, upstreamModel, clientId).catch(() => {});
             }
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -2077,4 +2104,4 @@ async function handleCountTokens(req, res, cleanPath, reqId) {
     });
 }
 
-module.exports = { handleMessages, handleCountTokens };
+module.exports = { handleMessages, handleCountTokens, AUGUST_REMINDER, RULE_REMINDER_MESSAGE, shouldInjectReminderMessage, shouldInjectAugustReminder };
