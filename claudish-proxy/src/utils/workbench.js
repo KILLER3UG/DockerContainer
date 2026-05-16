@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 const { getProfile } = require('./config');
-const { AUGUST_PERSONALITY_CONTRACT } = require('./context-builder');
+const { buildSystemPromptText } = require('./context-builder');
 const semanticMemory = require('./semantic-memory');
 const hostAgent = require('./host-agent');
 const { getMcpToolDefinitions, executeMcpToolCall, isMcpToolName } = require('./mcp-client');
@@ -466,27 +466,11 @@ async function executeWorkbenchTool(session, toolUse) {
 }
 
 function buildSystemPrompt(session) {
-    const topFacts = semanticMemory.getAllFacts().slice(0, 5);
-    const factsBlock = topFacts.length > 0
-        ? '\nSemantic memory facts:\n' + topFacts.map(f => `- ${f.key}: ${f.value}`).join('\n')
-        : '';
-
     const planLine = session.plan && session.approved
         ? `The user approved plan ${session.plan.id}. You may now modify proxy system files.`
         : 'No approved plan is active. Mutations to the proxy system directory are blocked.';
 
-    return [
-        AUGUST_PERSONALITY_CONTRACT,
-        '',
-        'You have access to ALL proxy capabilities: filesystem tools, shell execution (august__bash), web search/fetch, MCP tools, semantic memory, computer-use (mouse/keyboard/screenshot/windows/browser), sub-agent spawning (august__spawn_subagent), and cowork tools.',
-        '',
-        '=== HARD RULE: PROXY SYSTEM PROTECTION ===',
-        'You can freely read, search, and modify files ANYWHERE on the system — with one exception:',
-        'Any mutation targeting the proxy\'s own directory (claudish-proxy/) requires an explicit approved plan via workbench_submit_plan and user approval in the Workbench UI.',
-        'The proxy system directory contains: ' + PROXY_ROOT,
-        'If a file path or command references a file inside this directory and it is a write/edit/delete/rename/move/create operation, it will be blocked without an approved plan.',
-        'Operations OUTSIDE the proxy system directory work freely — no approval needed.',
-        planLine,
+    const toolGuide = [
         '',
         '=== AVAILABLE TOOL CATEGORIES ===',
         '- workbench_*: List/read/search/write files, replace text, run commands, submit plans (anywhere on system)',
@@ -495,9 +479,29 @@ function buildSystemPrompt(session) {
         '- WebSearch / WebFetch: Public web search and page fetching',
         '- mcp__cowork__*: Cowork compatibility tools (directory access, skills, plugins, import capability links)',
         '- computer_*: Host desktop control — screenshot, mouse (move/click/scroll), keyboard (type/key), window list/focus, app launch, visible browser',
-        'Keep responses concise and report what you did or found.',
-        factsBlock
-    ].filter(Boolean).join('\n');
+        'Keep responses concise and report what you did or found.'
+    ].join('\n');
+
+    const hardRule = [
+        '',
+        '=== HARD RULE: PROXY SYSTEM PROTECTION ===',
+        'You can freely read, search, and modify files ANYWHERE on the system — with one exception:',
+        'Any mutation targeting the proxy\'s own directory (claudish-proxy/) requires an explicit approved plan via workbench_submit_plan and user approval in the Workbench UI.',
+        'The proxy system directory contains: ' + PROXY_ROOT,
+        'If a file path or command references a file inside this directory and it is a write/edit/delete/rename/move/create operation, it will be blocked without an approved plan.',
+        'Operations OUTSIDE the proxy system directory work freely — no approval needed.',
+        planLine
+    ].join('\n');
+
+    // Build shared context blocks via context-builder (same as regular API path)
+    const basePrompt = buildSystemPromptText(null, {
+        includeMiniMaxContract: false,
+        includeWindowsContext: true,
+        includeOriginalSystem: false,
+        clientId: 'workbench-ui'
+    });
+
+    return basePrompt + hardRule + toolGuide;
 }
 
 function extractAssistantText(content = []) {
