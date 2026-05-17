@@ -4,3 +4,9 @@ host-agent/node_modules/
 src/august_infinite_memory.json
 src/august_semantic_memory.json
 src/utils/debug.txt
+*.tmp
+host-agent/tmp/
+host_files/dashboard-check/
+host_files/Unit-Test-Dropzone/
+src/tests/
+src/tailwind.generated.css

@@ -65,7 +65,10 @@ assert(systemPrompt.includes('<minimax_m2_7_instructions>'), 'MiniMax instructio
 assert(systemPrompt.includes('<proxy_self_awareness source="claudish-proxy" applies_to="all_models">'), 'proxy self-awareness wrapper missing');
 assert(systemPrompt.includes('mcp__cowork__*'), 'Cowork compatibility guidance should be present');
 assert(systemPrompt.includes('<august_global_context format="claude_memory_hierarchy" source="august_core_memory.json">'), 'global context wrapper missing');
-assert(systemPrompt.includes('<custom_skills source="config.customSkills">'), 'custom skills wrapper missing');
+assert(systemPrompt.includes('<skill_catalog source="config.customSkills">'), 'skill catalog wrapper missing');
+assert(systemPrompt.includes('<skill_catalog source="config.customSkills">'), 'skill catalog wrapper missing');
+assert(systemPrompt.includes('<skill_loading>'), 'skill loading instruction wrapper missing');
+assert(systemPrompt.includes('august__load_skill'), 'skill loading tool instruction missing');
 assert(systemPrompt.includes('<client_system_prompt>'), 'client system prompt wrapper missing');
 assert(systemPrompt.includes('Client says preserve tools.'), 'client system prompt content missing');
 

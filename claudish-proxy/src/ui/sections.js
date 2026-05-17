@@ -664,27 +664,116 @@ function loadMcpSkillsUI() {
             }
         }
 
+/* ── Toggle collapsible sections ── */
+        function toggleSection(elemId) {
+            const el = document.getElementById(elemId);
+            if (!el) return;
+            el.classList.toggle('hidden');
+        }
+
 /* ── Memory Preview & Context Limit ── */
         async function loadMemoryPreview() {
-            const preview = document.getElementById('memoryPreview');
             const meta = document.getElementById('memoryPreviewMeta');
-            if (!preview) return;
+            if (!meta) return;
             try {
                 const limit = document.getElementById('memoryContextMaxChars')?.value || DEFAULT_MEMORY_CONTEXT_MAX_CHARS;
-                const res = await fetch(`/ui/memory/preview?profile=claude&maxChars=${encodeURIComponent(limit)}`, { cache: 'no-store' });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.error || 'Failed to load context preview');
-                preview.textContent = data.prompt || '';
-                if (meta) {
-                    const context = data.context || {};
-                    const compactText = context.compacted
-                        ? ` August Brain compacted from ${formatExactNumber(context.fullLength || 0)} to ${formatExactNumber(context.finalLength || 0)} characters (limit ${formatExactNumber(context.maxChars || 0)}).`
-                        : ` August Brain is ${formatExactNumber(context.finalLength || context.fullLength || 0)} characters (limit ${formatExactNumber(context.maxChars || 0)}).`;
-                    meta.textContent = `${data.profile || 'claude'} context preview: ${formatExactNumber(data.length || 0)} characters injected before the client system prompt.${compactText}`;
+                const [previewRes, memRes, vecRes, semRes] = await Promise.all([
+                    fetch(`/ui/memory/preview?profile=claude&maxChars=${encodeURIComponent(limit)}`, { cache: 'no-store' }),
+                    fetch('/ui/memory', { cache: 'no-store' }),
+                    fetch('/ui/memory/vector', { cache: 'no-store' }),
+                    fetch('/ui/semantic-memory', { cache: 'no-store' })
+                ]);
+                const preview = await previewRes.json();
+                const memory = await memRes.json();
+                const vector = await vecRes.json();
+                const semantic = await semRes.json();
+                if (!previewRes.ok) throw new Error(preview.error || 'Failed to load August memory');
+
+                // Stats bar
+                const checkpointCount = (memory.conversation_checkpoints || []).length;
+                const facts = Array.isArray(semantic.facts) ? semantic.facts : [];
+                const vecCount = vector.count || 0;
+                document.getElementById('memFactCount').textContent = formatExactNumber(facts.length);
+                document.getElementById('memCheckpointCount').textContent = formatExactNumber(checkpointCount);
+                document.getElementById('memVectorCount').textContent = formatExactNumber(vecCount);
+                const allTimestamps = [
+                    ...(memory.conversation_checkpoints || []).map(c => c.timestamp),
+                    ...facts.map(f => f.updated),
+                    ...(vector.entries || []).map(e => e.timestamp)
+                ].filter(Boolean).sort().reverse();
+                document.getElementById('memUpdated').textContent = allTimestamps.length
+                    ? 'Last updated: ' + new Date(allTimestamps[0]).toLocaleDateString()
+                    : 'Last updated: --';
+
+                // Meta text
+                const context = preview.context || {};
+                const compactText = context.compacted
+                    ? ` August Brain compacted from ${formatExactNumber(context.fullLength || 0)} to ${formatExactNumber(context.finalLength || 0)} characters (limit ${formatExactNumber(context.maxChars || 0)}).`
+                    : ` August Brain is ${formatExactNumber(context.finalLength || context.fullLength || 0)} characters (limit ${formatExactNumber(context.maxChars || 0)}).`;
+                meta.textContent = `${preview.profile || 'claude'} MEMORY: ${formatExactNumber(preview.length || 0)} characters injected before the client system prompt.${compactText}`;
+
+                // Raw system prompt (hidden by default)
+                const rawEl = document.getElementById('memRawPrompt');
+                if (rawEl) rawEl.textContent = preview.prompt || '';
+
+                // Semantic facts
+                const factsEl = document.getElementById('memFactsContent');
+                if (factsEl) {
+                    if (facts.length === 0) {
+                        factsEl.innerHTML = '<div class="text-xs text-slate-400 dark:text-slate-500 italic">No semantic facts yet. Facts are auto-extracted from conversations.</div>';
+                    } else {
+                        factsEl.innerHTML = facts.slice(0, 20).map(f => `
+                            <div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 px-3 py-2">
+                                <div class="flex items-center gap-2">
+                                    <code class="text-xs font-semibold text-slate-700 dark:text-slate-200">${escMemHtml(f.key)}</code>
+                                    <span class="text-[10px] px-1.5 py-0.5 rounded-full ${f.category === 'user_preference' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300' : f.category === 'project_info' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'}">${escMemHtml(f.category || 'general')}</span>
+                                </div>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">${escMemHtml(f.value)}</p>
+                            </div>
+                        `).join('');
+                    }
                 }
+
+                // Vector entries
+                const vecEl = document.getElementById('memVectorContent');
+                if (vecEl) {
+                    const entries = vector.entries || [];
+                    if (entries.length === 0) {
+                        vecEl.innerHTML = '<div class="text-xs text-slate-400 dark:text-slate-500 italic">No vector entries yet. Auto-memory will populate this as you use the assistant.</div>';
+                    } else {
+                        vecEl.innerHTML = entries.slice(0, 20).map(e => `
+                            <div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 px-3 py-2">
+                                <div class="flex items-center justify-between">
+                                    <span class="text-xs font-semibold text-slate-700 dark:text-slate-200">${escMemHtml(e.topic)}</span>
+                                    <span class="text-[10px] text-slate-400">${new Date(e.timestamp).toLocaleDateString()}</span>
+                                </div>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">${escMemHtml(e.summary)}</p>
+                            </div>
+                        `).join('');
+                    }
+                }
+
+                // Checkpoints
+                const chkEl = document.getElementById('memCheckpointContent');
+                if (chkEl) {
+                    const checkpoints = memory.conversation_checkpoints || [];
+                    if (checkpoints.length === 0) {
+                        chkEl.innerHTML = '<div class="text-xs text-slate-400 dark:text-slate-500 italic">No checkpoints saved yet.</div>';
+                    } else {
+                        chkEl.innerHTML = checkpoints.slice(0, 15).map(c => `
+                            <div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 px-3 py-2">
+                                <div class="flex items-center justify-between">
+                                    <span class="text-xs font-semibold text-slate-700 dark:text-slate-200">${escMemHtml(c.topic || 'Checkpoint')}</span>
+                                    <span class="text-[10px] text-slate-400">${new Date(c.timestamp).toLocaleDateString()}</span>
+                                </div>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">${escMemHtml(c.summary || '')}</p>
+                            </div>
+                        `).join('');
+                    }
+                }
+
             } catch (e) {
-                preview.textContent = e.message;
-                if (meta) meta.textContent = 'Preview failed.';
+                if (meta) meta.textContent = 'Failed to load August memory: ' + e.message;
             }
         }
 
@@ -763,12 +852,48 @@ function loadMcpSkillsUI() {
             loadSemanticMemoryUI();
             loadSpecialistUI();
             loadUrlMcpUI();
+            loadVectorMemoryUI();
             if (document.getElementById('supermemoryUrl')) {
                 fetch('/ui/config/safe', { cache: 'no-store' }).then(r=>r.json()).then(cfg => {
                     const urlEl = document.getElementById('supermemoryUrl');
                     if (urlEl && cfg.supermemoryUrl) urlEl.value = cfg.supermemoryUrl;
                 }).catch(() => {});
             }
+        }
+
+/* ── Vector Memory ── */
+        async function loadVectorMemoryUI() {
+            const list = document.getElementById('vectorMemoryList');
+            const count = document.getElementById('vectorCount');
+            if (!list) return;
+            try {
+                const res = await fetch('/ui/memory/vector', { cache: 'no-store' });
+                const data = await res.json();
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                if (count) count.textContent = data.count || 0;
+                if (!data.count || data.count === 0) {
+                    list.innerHTML = '<div class="text-sm text-slate-400 dark:text-slate-500 italic">No vector entries yet. Auto-memory extraction will populate this as you use the assistant.</div>';
+                    return;
+                }
+                list.innerHTML = data.entries.map(e => `
+                    <div class="vector-entry rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 p-3">
+                        <div class="flex items-center justify-between">
+                            <span class="text-xs font-semibold text-slate-700 dark:text-slate-200">${escMemHtml(e.topic)}</span>
+                            <span class="text-[10px] text-slate-400">${new Date(e.timestamp).toLocaleDateString()}</span>
+                        </div>
+                        <p class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">${escMemHtml(e.summary)}</p>
+                    </div>
+                `).join('');
+            } catch (e) {
+                list.innerHTML = `<div class="text-xs text-red-500">${escMemHtml(e.message)}</div>`;
+            }
+        }
+
+        function filterVectorMemory(value) {
+            const q = String(value || '').toLowerCase();
+            document.querySelectorAll('.vector-entry').forEach(el => {
+                el.style.display = !q || el.textContent.toLowerCase().includes(q) ? '' : 'none';
+            });
         }
 
         async function loadSpecialistUI() {

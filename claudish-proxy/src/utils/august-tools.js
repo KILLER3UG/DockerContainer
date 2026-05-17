@@ -4,273 +4,20 @@ const path = require('path');
 const util = require('util');
 const execPromise = util.promisify(exec);
 
-// ── Path Permission System ────────────────────────────────────────────────────
-// Any command or file path the AI touches is checked against this list.
-// Paths INSIDE → go through normal confirmation gate (ask user).
-// Paths OUTSIDE → hard block immediately. AI is told to ask the user first.
-//
-// Add more entries here if you want to allow additional workspace roots.
-const ALLOWED_BASE_PATHS = [
-    'C:\\Users\\rober\\LocalFolders',
-    'C:/Users/rober/LocalFolders'
-];
-const NORMALIZED_ALLOWED_BASE_PATHS = ALLOWED_BASE_PATHS.map(base => path.resolve(base));
-
-/**
- * Scans a command string for Windows or Unix absolute paths using regex.
- * Returns an array of all found path strings (may be empty).
- */
-function extractPathsFromCommand(command) {
-    if (!command || typeof command !== 'string') return [];
-    const found = [];
-
-    // Windows absolute paths: C:\... or C:/...
-    const winPaths = command.match(/[A-Za-z]:[\\\/][^\s"'`,;|&>]+/g) || [];
-    found.push(...winPaths);
-
-    // Unix absolute paths: /home/... /usr/... /etc/... /tmp/... etc.
-    // Exclude /v1/ /app/ style API/docker paths which are not real FS paths
-    const unixPaths = command.match(/\/(?:home|usr|etc|tmp|var|root|opt|mnt|srv|data)[^\s"'`,;|&>]*/g) || [];
-    found.push(...unixPaths);
-
-    return found;
-}
-
-function hasParentTraversal(command) {
-    return /(^|[\s"'`(])\.\.(?:[\\/]|$)/.test(command);
-}
-
-/**
- * Returns null if the path is allowed, or an error message string if blocked.
- * A path is allowed if it starts with one of the ALLOWED_BASE_PATHS.
- */
-function checkPathPermission(filePath) {
-    const resolvedPath = path.resolve(filePath);
-    const isAllowed = NORMALIZED_ALLOWED_BASE_PATHS.some(base => {
-        const relative = path.relative(base, resolvedPath);
-        return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-    });
-    if (isAllowed) return null;
-    return `[August Permission Denied]\n` +
-           `The path '${resolvedPath}' is outside the permitted workspace.\n` +
-           `Permitted workspace roots:\n${ALLOWED_BASE_PATHS.map(p => `  - ${p}`).join('\n')}\n\n` +
-           `You do NOT have permission to access this path. ` +
-           `Stop and ask the user to explicitly grant access to this location before proceeding.`;
-}
-
-/**
- * Checks all paths found in a command against the allowlist.
- * Returns null if all paths are permitted, or the first block message found.
- */
-function checkCommandPaths(command) {
-    if (hasParentTraversal(command)) {
-        return `[August Permission Denied]\n` +
-               `The command contains parent-directory traversal ('..'), which is blocked because it can escape the permitted workspace roots.\n` +
-               `Permitted workspace roots:\n${ALLOWED_BASE_PATHS.map(p => `  - ${p}`).join('\n')}\n\n` +
-               `Use an explicit path inside the workspace, or ask the user to approve a different location first.`;
-    }
-    const paths = extractPathsFromCommand(command);
-    for (const p of paths) {
-        const blockMsg = checkPathPermission(p);
-        if (blockMsg) return blockMsg;
-    }
-    return null; // all clear
-}
-
-const CORE_MEMORY_FILE = path.join(__dirname, '..', 'august_core_memory.json');
-
-function getDefaultAugustCoreMemory() {
-    return {
-        user_profile: "No profile details recorded yet. Use august__core_memory_append to add details about the user.",
-        global_context: "No cross-session context established.",
-        active_projects: [],
-        integrations: {},
-        recent_events: [],
-        conversation_checkpoints: []
-    };
-}
-
-function normalizeAugustCoreMemory(raw) {
-    const defaults = getDefaultAugustCoreMemory();
-    const merged = {
-        ...defaults,
-        ...(raw && typeof raw === 'object' ? raw : {})
-    };
-
-    if (typeof merged.user_profile !== 'string') merged.user_profile = defaults.user_profile;
-    if (typeof merged.global_context !== 'string') merged.global_context = defaults.global_context;
-    if (!Array.isArray(merged.active_projects)) merged.active_projects = [];
-    if (!merged.integrations || typeof merged.integrations !== 'object' || Array.isArray(merged.integrations)) merged.integrations = {};
-    if (!Array.isArray(merged.recent_events)) merged.recent_events = [];
-    if (!Array.isArray(merged.conversation_checkpoints)) merged.conversation_checkpoints = [];
-
-    merged.active_projects = merged.active_projects
-        .filter(p => p && typeof p === 'object' && p.name);
-    merged.recent_events = merged.recent_events
-        .filter(e => e && typeof e === 'object' && e.summary);
-    merged.conversation_checkpoints = merged.conversation_checkpoints
-        .filter(c => c && typeof c === 'object' && c.summary);
-
-    return merged;
-}
-
-function readAugustCoreMemory() {
-    if (!fs.existsSync(CORE_MEMORY_FILE)) {
-        const defaultMemory = getDefaultAugustCoreMemory();
-        fs.writeFileSync(CORE_MEMORY_FILE, JSON.stringify(defaultMemory, null, 2));
-        return defaultMemory;
-    }
-    try {
-        return normalizeAugustCoreMemory(JSON.parse(fs.readFileSync(CORE_MEMORY_FILE, 'utf8')));
-    } catch (e) {
-        return normalizeAugustCoreMemory({ error: "Failed to parse core memory." });
-    }
-}
-
-function writeAugustCoreMemory(data) {
-    fs.writeFileSync(CORE_MEMORY_FILE, JSON.stringify(normalizeAugustCoreMemory(data), null, 2));
-}
-
-function renderAugustCoreMemory(memoryInput) {
-    const memory = normalizeAugustCoreMemory(memoryInput);
-    const projects = memory.active_projects.length > 0
-        ? memory.active_projects.map(p => {
-            const status = p.status ? ` (${p.status})` : '';
-            const summary = p.summary ? `: ${p.summary}` : '';
-            return `- ${p.name}${status}${summary}`;
-        }).join('\n')
-        : '- none recorded';
-    const integrations = Object.keys(memory.integrations).length > 0
-        ? Object.entries(memory.integrations).map(([name, details]) => {
-            if (!details || typeof details !== 'object') return `- ${name}`;
-            const status = details.status ? ` (${details.status})` : '';
-            const summary = details.summary ? `: ${details.summary}` : '';
-            return `- ${name}${status}${summary}`;
-        }).join('\n')
-        : '- none recorded';
-    const recentEvents = memory.recent_events.length > 0
-        ? memory.recent_events.map(event => {
-            const when = event.timestamp ? `[${event.timestamp}] ` : '';
-            return `- ${when}${event.summary}`;
-        }).join('\n')
-        : '- none recorded';
-    const checkpoints = memory.conversation_checkpoints.length > 0
-        ? memory.conversation_checkpoints.map(cp => {
-            const topic = cp.topic ? `${cp.topic}: ` : '';
-            return `- ${topic}${cp.summary}`;
-        }).join('\n')
-        : '- none recorded';
-
-    return {
-        user_profile: memory.user_profile,
-        global_context: memory.global_context,
-        active_projects: projects,
-        integrations,
-        recent_events: recentEvents,
-        conversation_checkpoints: checkpoints
-    };
-}
-
-function upsertProject(memory, project) {
-    const normalized = normalizeAugustCoreMemory(memory);
-    const nextProject = {
-        name: project.name,
-        status: project.status || '',
-        summary: project.summary || '',
-        updated_at: new Date().toISOString()
-    };
-    const existingIndex = normalized.active_projects.findIndex(p => p.name === project.name);
-    if (existingIndex >= 0) normalized.active_projects[existingIndex] = { ...normalized.active_projects[existingIndex], ...nextProject };
-    else normalized.active_projects.push(nextProject);
-    return normalized;
-}
-
-function upsertIntegration(memory, integration) {
-    const normalized = normalizeAugustCoreMemory(memory);
-    normalized.integrations[integration.name] = {
-        status: integration.status || '',
-        summary: integration.summary || '',
-        updated_at: new Date().toISOString()
-    };
-    return normalized;
-}
-
-function appendRecentEvent(memory, event) {
-    const normalized = normalizeAugustCoreMemory(memory);
-    normalized.recent_events.push({
-        summary: event.summary,
-        timestamp: event.timestamp || new Date().toISOString(),
-        source: event.source || ''
-    });
-    return normalized;
-}
-
-function appendCheckpoint(memory, checkpoint) {
-    const normalized = normalizeAugustCoreMemory(memory);
-    normalized.conversation_checkpoints.push({
-        topic: checkpoint.topic || '',
-        summary: checkpoint.summary,
-        timestamp: checkpoint.timestamp || new Date().toISOString()
-    });
-    return normalized;
-}
-
-// ── Sub-agent Strategy Config ──
-const SUBAGENT_CONFIG_FILE = path.join(__dirname, '..', 'august_subagent_config.json');
-
-function getDefaultSubagentConfig() {
-    return {
-        current: {
-            name: 'default',
-            system_prompt: 'You are a focused sub-agent spawned by August. You have access to MCP servers, web search/fetch, and file operations. Complete the assigned task efficiently using these tools. Report your findings clearly.',
-            max_loops: 5,
-            score: { completion_rate: 0, avg_loops: 0, total_runs: 0, error_rate: 0 },
-            source: 'built-in',
-            created: new Date().toISOString()
-        },
-        history: [],
-        observed_patterns: [],
-        metadata: {
-            last_learning_at: null,
-            total_learnings: 0,
-            total_spawns: 0,
-            total_successes: 0
-        }
-    };
-}
-
-function loadSubagentConfig() {
-    if (!fs.existsSync(SUBAGENT_CONFIG_FILE)) {
-        const def = getDefaultSubagentConfig();
-        fs.writeFileSync(SUBAGENT_CONFIG_FILE, JSON.stringify(def, null, 2));
-        return def;
-    }
-    try {
-        const raw = JSON.parse(fs.readFileSync(SUBAGENT_CONFIG_FILE, 'utf8'));
-        const def = getDefaultSubagentConfig();
-        return { ...def, ...raw, current: { ...def.current, ...(raw.current || {}) }, metadata: { ...def.metadata, ...(raw.metadata || {}) } };
-    } catch (e) {
-        return getDefaultSubagentConfig();
-    }
-}
-
-function saveSubagentConfig(config) {
-    fs.writeFileSync(SUBAGENT_CONFIG_FILE, JSON.stringify(config, null, 2));
-}
-
-function subagentConfigToContextBlock() {
-    const cfg = loadSubagentConfig();
-    const cur = cfg.current;
-    const hist = cfg.history;
-    const patterns = cfg.observed_patterns;
-    return `[August Sub-agent System]
-Current strategy: "${cur.name}" (source: ${cur.source}, created: ${cur.created})
-Score: completion_rate=${(cur.score.completion_rate * 100).toFixed(0)}%, avg_loops=${cur.score.avg_loops.toFixed(1)}, error_rate=${(cur.score.error_rate * 100).toFixed(0)}%
-Total spawns: ${cfg.metadata.total_spawns} | Successes: ${cfg.metadata.total_successes} | Learnings: ${cfg.metadata.total_learnings}
-Archived strategies: ${hist.length} | Observed client patterns: ${patterns.length}
-
-You can improve your sub-agent by calling august__learn_subagent to scan all clients passing through the proxy, discover better patterns, and upgrade your strategy.`;
-}
+const { checkCommandPaths, checkPathPermission, extractPathsFromCommand } = require('./path-permissions');
+const {
+    CORE_MEMORY_FILE,
+    getDefaultAugustCoreMemory,
+    normalizeAugustCoreMemory,
+    readAugustCoreMemory,
+    writeAugustCoreMemory,
+    renderAugustCoreMemory,
+    upsertProject,
+    upsertIntegration,
+    appendRecentEvent,
+    appendCheckpoint
+} = require('./core-memory');
+const { getDefaultSubagentConfig, loadSubagentConfig, saveSubagentConfig, subagentConfigToContextBlock } = require('./subagent-config');
 
 // ── Sub-agent Tool Execution ──
 // Build tool definitions for the sub-agent from all available managed proxy tools
@@ -673,6 +420,23 @@ const AUGUST_TOOLS = [
                     }
                 },
                 required: []
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'august__load_skill',
+            description: 'Loads the full instructions for a named skill from the skill catalog. Use this when a task description in the catalog matches what you need to do. Returns the complete skill content including trigger conditions and step-by-step guidance.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    name: {
+                        type: 'string',
+                        description: 'The exact name of the skill to load, as listed in the skill_catalog section of the system prompt.'
+                    }
+                },
+                required: ['name']
             }
         }
     }
@@ -1281,6 +1045,21 @@ async function executeAugustToolCall(toolName, args) {
                 reportLines.push(`\nAugust can call august__learn_subagent again anytime to scan for newer patterns.`);
 
                 return reportLines.join('\n');
+            }
+
+            case 'august__load_skill': {
+                const { getEnabledSkills } = require('./skills');
+                const skill = getEnabledSkills().find(s => s.name === args.name);
+                if (!skill) {
+                    const available = getEnabledSkills().map(s => `"${s.name}"`).join(', ');
+                    return `Skill "${args.name}" not found. Available skills: ${available}`;
+                }
+                return [
+                    `## Skill: ${skill.name}`,
+                    skill.description ? `\n${skill.description}` : '',
+                    skill.trigger ? `\n**Trigger:** ${skill.trigger}` : '',
+                    `\n### Instructions\n\n${skill.instructions}`
+                ].join('\n');
             }
 
             default:

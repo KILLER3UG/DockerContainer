@@ -158,7 +158,7 @@ Respond ONLY with valid JSON in this exact format:
         } else {
             // Rewrite to OpenAI-compatible endpoint
             if (targetUrl.includes('/anthropic/v1/messages')) {
-                targetUrl = targetUrl.replace('/anthropic/v1/messages', '/v1/chat/completions');
+                targetUrl = targetUrl.replace('/anthropic/v1/messages', targetUrl.includes('minimax') ? '/v1/text/chatcompletion_v2' : '/v1/chat/completions');
             } else if (targetUrl.includes('/anthropic')) {
                 targetUrl = targetUrl.replace('/anthropic', '/v1/text/chatcompletion_v2');
             }
@@ -342,7 +342,7 @@ Respond ONLY with valid JSON in this exact format:
 
             let semTargetUrl = cfg.targetUrl;
             if (semTargetUrl.includes('/anthropic/v1/messages')) {
-                semTargetUrl = semTargetUrl.replace('/anthropic/v1/messages', '/v1/chat/completions');
+                semTargetUrl = semTargetUrl.replace('/anthropic/v1/messages', semTargetUrl.includes('minimax') ? '/v1/text/chatcompletion_v2' : '/v1/chat/completions');
             } else if (semTargetUrl.includes('/anthropic') && !semTargetUrl.includes('/chat/completions')) {
                 semTargetUrl = semTargetUrl.replace('/v1/messages', '/v1/chat/completions');
             }

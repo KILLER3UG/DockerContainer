@@ -16,7 +16,8 @@ assert.strictEqual(plugin.name, 'GitHub-Helper', 'plugin name should normalize')
 assert.strictEqual(plugin.enabled, true, 'plugin should default enabled');
 
 const rendered = renderPluginsForSystem([plugin]);
-assert(rendered.includes('<plugin name="GitHub-Helper" enabled="true">'), 'plugin XML wrapper missing');
+assert(rendered.includes('<plugin name="GitHub-Helper">'), 'plugin XML wrapper missing');
+assert(rendered.includes('Adds repository workflow behavior.'), 'plugin description missing');
 assert(rendered.includes('<mcp_servers>'), 'MCP plugin section missing');
 assert(rendered.includes('<skills>'), 'skill plugin section missing');
 

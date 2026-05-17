@@ -8,12 +8,17 @@ const hostAgent = require('./host-agent');
 const { getMcpToolDefinitions, executeMcpToolCall, isMcpToolName } = require('./mcp-client');
 const { getAugustToolDefinitions, executeAugustToolCall, isAugustToolName } = require('./august-tools');
 const { getCoworkToolDefinitions, executeCoworkToolCall, isCoworkToolName } = require('./cowork-tools');
-const { executeManagedWebTool, isManagedWebToolName } = require('./local-web');
+const { executeManagedWebTool, isManagedWebToolName, getManagedWebToolDefinitions } = require('./local-web');
+const { extractAndSaveMemories } = require('./auto-memory');
 
 const sessions = new Map();
 const WORKSPACE_ROOT = path.resolve(__dirname, '..');
 const HOST_ROOT = 'C:\\Users\\rober\\LocalFolders\\DockerContainer\\claudish-proxy';
 const MAX_TOOL_LOOPS = 8;
+const COMPACT_THRESHOLD = 60;      // compact messages after this many entries
+const COMPACT_KEEP_RECENT = 12;    // keep last N messages verbatim
+const DRIFT_INTERVAL = 8;          // inject identity reminder every N tool-result turns
+const MAX_RETRIES = 2;             // upstream fetch retry count
 
 function newId(prefix) {
     return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -214,12 +219,14 @@ function getAllTools() {
     const mcpTools = (getMcpToolDefinitions() || []).map(openAiToAnthropicTool);
     const augustTools = (getAugustToolDefinitions() || []).map(openAiToAnthropicTool);
     const coworkTools = (getCoworkToolDefinitions() || []).map(openAiToAnthropicTool);
+    const webTools = (getManagedWebToolDefinitions() || []).map(openAiToAnthropicTool);
 
     const all = [
         ...coreWorkbenchTools,
         ...augustTools,
         ...mcpTools,
         ...coworkTools,
+        ...webTools,
         ...hostAgent.toolDefinitions()
     ];
 
@@ -233,8 +240,7 @@ function getAllTools() {
 
 function toolDefinitions(session) {
     const allTools = getAllTools();
-    const planActive = session.plan && session.approved;
-    return planActive ? allTools : allTools;
+    return allTools;
 }
 
 function openAiToolDefinitions(session) {
@@ -494,10 +500,15 @@ function buildSystemPrompt(session) {
     ].join('\n');
 
     // Build shared context blocks via context-builder (same as regular API path)
+    const profile = getProfile(session.provider === 'codex' ? 'codex' : 'claude') || {};
+    const model = profile._upstreamModel || profile.currentModel;
+    const targetUrl = session.provider === 'codex' ? normalizeOpenAiTargetUrl(profile) : profile.targetUrl;
     const basePrompt = buildSystemPromptText(null, {
-        includeMiniMaxContract: false,
+        includeMiniMaxContract: true,
         includeWindowsContext: true,
         includeOriginalSystem: false,
+        model,
+        targetUrl,
         clientId: 'workbench-ui'
     });
 
@@ -738,6 +749,291 @@ async function sendWorkbenchMessage({ sessionId, message, provider } = {}) {
     return callWorkbenchModel(session);
 }
 
+/* ── SSE Streaming versions ── */
+
+function safeEmit(emit, type, data) {
+    try { emit(type, data); } catch (_) { throw new Error('SSE connection closed'); }
+}
+
+async function parseAnthropicStream(response, onEvent) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '', eventType = '', eventData = '';
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const line of lines) {
+            if (line.startsWith('event: ')) eventType = line.slice(7).trim();
+            else if (line.startsWith('data: ')) eventData = line.slice(6).trim();
+            else if (line === '' && eventType && eventData) {
+                if (eventData !== '[DONE]') { try { onEvent(eventType, JSON.parse(eventData)); } catch (_) {} }
+                eventType = ''; eventData = '';
+            }
+        }
+    }
+    if (eventType && eventData && eventData !== '[DONE]') { try { onEvent(eventType, JSON.parse(eventData)); } catch (_) {} }
+}
+
+async function parseOpenAiStream(response, onData) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || !trimmed.startsWith('data: ')) continue;
+            const payload = trimmed.slice(6).trim();
+            if (payload === '[DONE]') { onData('[DONE]', null); continue; }
+            try { onData('chunk', JSON.parse(payload)); } catch (_) {}
+        }
+    }
+}
+
+async function callAnthropicWorkbenchModelStream(session, emit) {
+    const profile = getProfile('claude') || {};
+    if (!profile.targetUrl) throw new Error('Claude profile target URL is missing.');
+    const model = profile._upstreamModel || profile.currentModel || 'claude-opus-4-6';
+
+    let loops = 0;
+    while (loops < MAX_TOOL_LOOPS) {
+        loops++;
+        const response = await fetch(profile.targetUrl, {
+            method: 'POST',
+            headers: buildHeaders(profile.apiKey),
+            body: JSON.stringify({
+                model,
+                max_tokens: 2048,
+                system: buildSystemPrompt(session),
+                messages: session.messages,
+                tools: toolDefinitions(session),
+                stream: true
+            }),
+            signal: AbortSignal.timeout(300000)
+        });
+        if (!response.ok) {
+            const raw = await response.text();
+            throw new Error(`Workbench upstream error ${response.status}: ${raw.slice(0, 500)}`);
+        }
+
+        const blocks = {};
+        let textBuffer = '';
+
+        await parseAnthropicStream(response, (eventType, data) => {
+            switch (eventType) {
+                case 'content_block_start': {
+                    const block = { ...data.content_block, index: data.index };
+                    blocks[data.index] = block;
+                    if (block.type === 'tool_use') {
+                        safeEmit(emit, 'tool_use', { id: block.id, name: block.name, input: block.input || {} });
+                    }
+                    break;
+                }
+                case 'content_block_delta': {
+                    const block = blocks[data.index];
+                    if (!block) break;
+                    if (data.delta.type === 'thinking_delta') {
+                        block.thinking = (block.thinking || '') + (data.delta.thinking || '');
+                        safeEmit(emit, 'thinking', { content: data.delta.thinking || '' });
+                    } else if (data.delta.type === 'text_delta') {
+                        block.text = (block.text || '') + (data.delta.text || '');
+                        textBuffer += data.delta.text || '';
+                    } else if (data.delta.type === 'input_json_delta') {
+                        block._inputPart = (block._inputPart || '') + (data.delta.partial_json || '');
+                    }
+                    break;
+                }
+                case 'content_block_stop': {
+                    const block = blocks[data.index];
+                    if (block && block.type === 'tool_use' && block._inputPart) {
+                        try { block.input = JSON.parse(block._inputPart); } catch (_) {}
+                        delete block._inputPart;
+                    }
+                    break;
+                }
+                case 'message_stop': {
+                    if (textBuffer) { safeEmit(emit, 'text', { content: textBuffer }); textBuffer = ''; }
+                    break;
+                }
+            }
+        });
+
+        if (textBuffer) { safeEmit(emit, 'text', { content: textBuffer }); textBuffer = ''; }
+
+        const content = Object.values(blocks).sort((a, b) => (a.index || 0) - (b.index || 0));
+        for (const b of content) { delete b.index; delete b._inputPart; }
+        session.messages.push({ role: 'assistant', content });
+
+        const toolUses = content.filter(b => b.type === 'tool_use');
+        if (!toolUses.length) {
+            session.updatedAt = new Date().toISOString();
+            return;
+        }
+
+        const toolResults = [];
+        for (const toolUse of toolUses) {
+            try {
+                const result = await executeWorkbenchTool(session, toolUse);
+                const c = JSON.stringify(result, null, 2);
+                const isError = !!result.blocked;
+                safeEmit(emit, 'tool_result', { id: toolUse.id, content: c, is_error: isError });
+                toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: c, is_error: isError });
+            } catch (e) {
+                const c = `[Workbench Tool Error] ${e.message}`;
+                safeEmit(emit, 'tool_result', { id: toolUse.id, content: c, is_error: true });
+                toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: c, is_error: true });
+            }
+        }
+        session.messages.push({ role: 'user', content: toolResults });
+    }
+
+    session.updatedAt = new Date().toISOString();
+    safeEmit(emit, 'text', { content: 'Workbench stopped after the maximum tool loop count.' });
+}
+
+async function callOpenAiWorkbenchModelStream(session, emit) {
+    const profile = getProfile('codex') || {};
+    const targetUrl = normalizeOpenAiTargetUrl(profile);
+    if (!targetUrl) throw new Error('Codex profile target URL is missing.');
+    const model = profile._upstreamModel || profile.currentModel || 'gpt-4o';
+
+    let loops = 0;
+    while (loops < MAX_TOOL_LOOPS) {
+        loops++;
+        const response = await fetch(targetUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...(profile.apiKey ? { Authorization: `Bearer ${profile.apiKey}` } : {})
+            },
+            body: JSON.stringify({
+                model,
+                messages: [
+                    { role: 'system', content: buildSystemPrompt(session) },
+                    ...toOpenAiMessages(session.messages)
+                ],
+                tools: openAiToolDefinitions(session),
+                tool_choice: 'auto',
+                stream: true
+            }),
+            signal: AbortSignal.timeout(300000)
+        });
+        if (!response.ok) {
+            const raw = await response.text();
+            throw new Error(`Workbench upstream error ${response.status}: ${raw.slice(0, 500)}`);
+        }
+
+        let textBuffer = '';
+        const toolCallAccum = {};
+
+        await parseOpenAiStream(response, (eventType, data) => {
+            if (eventType === '[DONE]') return;
+            const choice = data.choices?.[0];
+            if (!choice) return;
+            const delta = choice.delta || {};
+
+            if (delta.content) textBuffer += delta.content;
+
+            if (delta.tool_calls) {
+                for (const tc of delta.tool_calls) {
+                    const idx = tc.index;
+                    if (!toolCallAccum[idx]) toolCallAccum[idx] = {};
+                    if (tc.id) toolCallAccum[idx].id = tc.id;
+                    if (tc.function?.name) toolCallAccum[idx].name = tc.function.name;
+                    if (tc.function?.arguments) {
+                        toolCallAccum[idx].args = (toolCallAccum[idx].args || '') + tc.function.arguments;
+                    }
+                }
+            }
+
+            if (choice.finish_reason) {
+                const indices = Object.keys(toolCallAccum).sort((a, b) => Number(a) - Number(b));
+                for (const i of indices) {
+                    const tc = toolCallAccum[i];
+                    let input = {};
+                    try { input = JSON.parse(tc.args || '{}'); } catch (_) {}
+                    safeEmit(emit, 'tool_use', { id: tc.id || newId('toolu'), name: tc.name, input });
+                }
+                if (textBuffer) { safeEmit(emit, 'text', { content: textBuffer }); textBuffer = ''; }
+            }
+        });
+
+        const content = [];
+        if (textBuffer) content.push({ type: 'text', text: textBuffer });
+
+        const toolUses = [];
+        const indices = Object.keys(toolCallAccum).sort((a, b) => Number(a) - Number(b));
+        for (const i of indices) {
+            const tc = toolCallAccum[i];
+            let input = {};
+            try { input = JSON.parse(tc.args || '{}'); } catch (_) {}
+            const tu = { type: 'tool_use', id: tc.id || newId('toolu'), name: tc.name, input };
+            content.push(tu);
+            toolUses.push(tu);
+        }
+
+        session.messages.push({ role: 'assistant', content });
+
+        if (!toolUses.length) {
+            session.updatedAt = new Date().toISOString();
+            return;
+        }
+
+        const toolResults = [];
+        for (const toolUse of toolUses) {
+            try {
+                const result = await executeWorkbenchTool(session, toolUse);
+                const c = JSON.stringify(result, null, 2);
+                const isError = !!result.blocked;
+                safeEmit(emit, 'tool_result', { id: toolUse.id, content: c, is_error: isError });
+                toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: c, is_error: isError });
+            } catch (e) {
+                const c = `[Workbench Tool Error] ${e.message}`;
+                safeEmit(emit, 'tool_result', { id: toolUse.id, content: c, is_error: true });
+                toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: c, is_error: true });
+            }
+        }
+        session.messages.push({ role: 'user', content: toolResults });
+    }
+
+    session.updatedAt = new Date().toISOString();
+    safeEmit(emit, 'text', { content: 'Workbench stopped after the maximum tool loop count.' });
+}
+
+async function sendWorkbenchMessageStream({ sessionId, message, provider } = {}, emit) {
+    const session = getWorkbenchSession(sessionId);
+    if (provider === 'claude' || provider === 'codex') session.provider = provider;
+    const text = String(message || '').trim();
+    if (!text) throw new Error('Message is required.');
+    session.messages.push({ role: 'user', content: text });
+    session.updatedAt = new Date().toISOString();
+
+    if (session.provider === 'codex') {
+        await callOpenAiWorkbenchModelStream(session, emit);
+    } else {
+        await callAnthropicWorkbenchModelStream(session, emit);
+    }
+
+    // Background auto-memory extraction
+    try {
+        const lastAssistant = session.messages.filter(m => m.role === 'assistant').pop();
+        if (lastAssistant) {
+            const cfg = getProfile(session.provider === 'codex' ? 'codex' : 'claude') || {};
+            extractAndSaveMemories(session.messages, lastAssistant, cfg, cfg._upstreamModel || cfg.currentModel, 'workbench')
+                .catch(e => console.warn('[Auto-Memory] Workbench extraction failed:', e.message));
+        }
+    } catch (_) {}
+
+    safeEmit(emit, 'session', summarizeSession(session));
+}
+
 function approveWorkbenchPlan(sessionId) {
     const session = getWorkbenchSession(sessionId);
     if (!session.plan) throw new Error('No submitted plan is waiting for approval.');
@@ -759,6 +1055,7 @@ module.exports = {
     getWorkbenchSession,
     resetWorkbenchSession,
     sendWorkbenchMessage,
+    sendWorkbenchMessageStream,
     summarizeSession
 };
 

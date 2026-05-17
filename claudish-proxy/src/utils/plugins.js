@@ -86,32 +86,25 @@ function deletePlugin(name) {
     return { deleted: config.customPlugins.length < before };
 }
 
-function renderPluginsForSystem(plugins = getEnabledPlugins()) {
+function renderPluginCatalog(plugins = getEnabledPlugins()) {
     if (!plugins || plugins.length === 0) return '';
     return plugins.map(plugin => {
-        const parts = [
-            `<plugin name="${escapeXml(plugin.name)}" enabled="${plugin.enabled ? 'true' : 'false'}">`
-        ];
-        if (plugin.description) parts.push(`<description>${escapeXml(plugin.description)}</description>`);
-        if (plugin.sourceUrl) parts.push(`<source_url>${escapeXml(plugin.sourceUrl)}</source_url>`);
-        if (plugin.mcpServers.length > 0) {
-            parts.push('<mcp_servers>');
-            plugin.mcpServers.forEach(server => {
-                parts.push(`- ${escapeXml(server.name || 'unnamed')} (${escapeXml(server.command || 'unknown command')})`);
-            });
-            parts.push('</mcp_servers>');
-        }
+        const parts = [`<plugin name="${escapeXml(plugin.name)}">${escapeXml(plugin.description || '')}`];
         if (plugin.skills.length > 0) {
-            parts.push('<skills>');
-            plugin.skills.forEach(skill => {
-                parts.push(`- ${escapeXml(skill.name || 'unnamed')}: ${escapeXml(skill.description || skill.trigger || '')}`);
-            });
-            parts.push('</skills>');
+            const names = plugin.skills.map(s => escapeXml(s.name || s)).join(', ');
+            parts.push(`<skills>${names}</skills>`);
         }
-        if (plugin.notes) parts.push(`<notes>${escapeXml(plugin.notes)}</notes>`);
+        if (plugin.mcpServers.length > 0) {
+            const names = plugin.mcpServers.map(s => escapeXml(s.name || s)).join(', ');
+            parts.push(`<mcp_servers>${names}</mcp_servers>`);
+        }
         parts.push('</plugin>');
         return parts.join('\n');
     }).join('\n\n');
+}
+
+function renderPluginsForSystem(plugins = getEnabledPlugins()) {
+    return renderPluginCatalog(plugins);
 }
 
 module.exports = {
@@ -120,6 +113,7 @@ module.exports = {
     getPlugins,
     normalizeName,
     normalizePlugin,
+    renderPluginCatalog,
     renderPluginsForSystem,
     savePlugin,
     setPluginEnabled

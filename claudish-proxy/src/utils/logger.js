@@ -616,10 +616,47 @@ function sanitizeForDisplay(data) {
     return str.replace(/"(api[_-]?key|authorization|token)"\s*:\s*"[^"]*"/gi, '"$1": "***"');
 }
 
+// ── Conversation grouping ──
+function getConversations(period, context = {}) {
+    cleanupStalePendingRequests();
+    const logs = getFilteredRequests(period, context);
+    const grouped = {};
+    for (const entry of logs) {
+        const client = entry.clientType || 'unknown';
+        if (!grouped[client]) grouped[client] = [];
+        const details = requestDetails.get(entry.reqId);
+        let messages = null;
+        let response = null;
+        if (details) {
+            try {
+                const reqBody = typeof details.requestBody === 'string' ? JSON.parse(details.requestBody) : details.requestBody;
+                if (reqBody?.messages) messages = reqBody.messages;
+                else if (reqBody?.system) messages = [{ role: 'system', content: typeof reqBody.system === 'string' ? reqBody.system : JSON.stringify(reqBody.system) }];
+
+                const resBody = typeof details.responseBody === 'string' ? JSON.parse(details.responseBody) : details.responseBody;
+                if (resBody) response = resBody;
+            } catch {}
+        }
+        grouped[client].push({
+            ...entry,
+            details: details ? {
+                messages,
+                response,
+                thinking: details.thinking,
+                toolCalls: details.toolCalls,
+                finishReason: details.finishReason,
+                error: details.error
+            } : null
+        });
+    }
+    return grouped;
+}
+
 module.exports = {
     logActivity, getActivityLog,
     startRequest, endRequest, getRequestLog, getPendingRequests,
     getFilteredRequests, getStats,
     captureRequest, captureResponse, captureTokens, captureError, getRequestDetails, getRequestDetail,
+    getConversations,
     addSSEClient, removeSSEClient
 };

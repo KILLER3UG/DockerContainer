@@ -4,10 +4,11 @@
     "system_prompt": "You are a focused sub-agent spawned by August. You have access to MCP servers, web search/fetch, and file operations. Complete the assigned task efficiently using these tools. Report your findings clearly.",
     "max_loops": 5,
     "score": {
-      "completion_rate": 0,
-      "avg_loops": 0,
-      "total_runs": 0,
-      "error_rate": 0
+      "completion_rate": 1,
+      "avg_loops": 3,
+      "total_runs": 1,
+      "error_rate": 0,
+      "last_run": "2026-05-16T14:14:00.805Z"
     },
     "source": "built-in",
     "created": "2026-05-16T04:14:32.475Z"
@@ -17,7 +18,7 @@
   "metadata": {
     "last_learning_at": null,
     "total_learnings": 0,
-    "total_spawns": 0,
-    "total_successes": 0
+    "total_spawns": 1,
+    "total_successes": 1
   }
 }

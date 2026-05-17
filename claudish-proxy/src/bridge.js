@@ -3,7 +3,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { getConfig, saveConfig, getProfile, saveProfile, getBookmarks, saveBookmark, deleteBookmark } = require('./utils/config');
-const { getActivityLog, startRequest, endRequest, getRequestLog, getPendingRequests, getFilteredRequests, getStats, getRequestDetails, getRequestDetail, addSSEClient, removeSSEClient } = require('./utils/logger');
+const { getActivityLog, startRequest, endRequest, getRequestLog, getPendingRequests, getFilteredRequests, getStats, getRequestDetails, getRequestDetail, getConversations, addSSEClient, removeSSEClient } = require('./utils/logger');
 const anthropicAdapter = require('./adapters/anthropic');
 const openaiAdapter = require('./adapters/openai');
 const { getMcpServerStatus, restartMcpServers, startMcpServers } = require('./utils/mcp-client');
@@ -19,7 +19,7 @@ const { createHostFilesFolder, getCompatibilityStatus } = require('./utils/compa
 const { importCapabilityLink } = require('./utils/link-importer');
 const { getCapabilityHealth } = require('./utils/health');
 const { listMemoryItems, searchMemory, updateMemoryItem } = require('./utils/memory-lifecycle');
-const { approveWorkbenchPlan, createWorkbenchSession, resetWorkbenchSession, sendWorkbenchMessage } = require('./utils/workbench');
+const { approveWorkbenchPlan, createWorkbenchSession, resetWorkbenchSession, sendWorkbenchMessageStream } = require('./utils/workbench');
 const hostAgent = require('./utils/host-agent');
 
 const UI_PATH = path.join(__dirname, 'ui.html');
@@ -227,10 +227,24 @@ const server = http.createServer(async (req, res) => {
     if (req.url === '/ui/workbench/chat' && req.method === 'POST') {
         try {
             const data = await readJsonBody(req, { limitBytes: 2 * 1024 * 1024 });
-            return sendJson(res, await sendWorkbenchMessage(data));
+            res.writeHead(200, {
+                'Content-Type': 'text/event-stream',
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'X-Accel-Buffering': 'no'
+            });
+            await sendWorkbenchMessageStream(data, (type, payload) => {
+                res.write(`event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`);
+            });
+            res.write('event: done\ndata: {}\n\n');
+            res.end();
         } catch (e) {
-            return sendError(res, e, 500);
+            try {
+                res.write(`event: error\ndata: ${JSON.stringify({ message: e.message })}\n\n`);
+                res.end();
+            } catch (_) {}
         }
+        return;
     }
 
     if (req.url === '/ui/workbench/approve' && req.method === 'POST') {
@@ -411,6 +425,16 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, searchMemory(url.searchParams.get('q') || ''));
     }
 
+    if (req.url === '/ui/memory/vector' && req.method === 'GET') {
+        const { readVectorEntries } = require('./utils/vector-db');
+        const entries = readVectorEntries().map(e => ({
+            topic: e.topic,
+            summary: e.summary,
+            timestamp: e.timestamp
+        }));
+        return sendJson(res, { entries, count: entries.length });
+    }
+
     // ── Real-time SSE stream ──
     if (req.url.startsWith('/ui/stream') && req.method === 'GET') {
         const url = new URL(req.url, `http://${req.headers.host}`);
@@ -450,6 +474,14 @@ const server = http.createServer(async (req, res) => {
         const periodContext = getPeriodContext(url);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify(getStats(period, periodContext)));
+    }
+
+    if (req.url.startsWith('/ui/conversations') && req.method === 'GET') {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const period = url.searchParams.get('period') || 'all';
+        const periodContext = getPeriodContext(url);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify(getConversations(period, periodContext)));
     }
 
     if (req.url === '/ui/save' && req.method === 'POST') {

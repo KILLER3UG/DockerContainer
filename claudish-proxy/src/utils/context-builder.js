@@ -1,6 +1,6 @@
 const { readAugustCoreMemory, subagentConfigToContextBlock } = require('./august-tools');
-const { renderSkillsForSystem } = require('./skills');
-const { renderPluginsForSystem } = require('./plugins');
+const { renderSkillCatalog } = require('./skills');
+const { renderPluginCatalog } = require('./plugins');
 const { getDisplayName } = require('./client-identity');
 const semanticMemory = require('./semantic-memory');
 
@@ -397,15 +397,17 @@ function buildSystemPromptDetails(system, options = {}) {
         'source="august_subagent_config.json"'
     ));
 
-    const renderedSkills = renderSkillsForSystem(skills);
-    if (renderedSkills) {
-        chunks.push(wrapTag('custom_skills', renderedSkills, 'source="config.customSkills"'));
+    const skillCatalog = renderSkillCatalog(skills);
+    if (skillCatalog) {
+        chunks.push(wrapTag('skill_catalog', skillCatalog, 'source="config.customSkills"'));
     }
 
-    const renderedPlugins = renderPluginsForSystem();
-    if (renderedPlugins) {
-        chunks.push(wrapTag('proxy_plugins', renderedPlugins, 'source="config.customPlugins"'));
+    const pluginCatalog = renderPluginCatalog();
+    if (pluginCatalog) {
+        chunks.push(wrapTag('plugin_catalog', pluginCatalog, 'source="config.customPlugins"'));
     }
+
+    chunks.push(wrapTag('skill_loading', 'Skills are loaded on-demand. Review the catalog above. When a task matches a skill\'s description, call august__load_skill with the skill name to load its full instructions.'));
 
     // ── Client identity injection ──
     const displayName = getDisplayName(clientId);

@@ -222,3 +222,126 @@ function renderHealthUI() {
     cards.innerHTML = (healthState.cards || []).map(card => `<div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900"><p class="text-[11px] font-semibold uppercase text-slate-500 dark:text-slate-400">${escapeHtml(card.label)}</p><div class="mt-3 flex items-center justify-between gap-3"><p class="metric-value text-xl font-semibold text-slate-900 dark:text-slate-100">${escapeHtml(String(card.value))}</p>${renderTinyBadge(card.status || 'ok', healthStatusClass(card.status || 'ok'))}</div></div>`).join('');
     checks.innerHTML = (healthState.checks || []).map(check => `<div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900"><div class="flex flex-wrap items-center gap-2"><h3 class="text-sm font-semibold text-slate-800 dark:text-slate-100">${escapeHtml(check.label)}</h3>${renderTinyBadge(check.status || 'ok', healthStatusClass(check.status || 'ok'))}${renderTinyBadge(check.area || 'system', 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300')}</div><p class="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">${escapeHtml(check.detail || '')}</p>${check.action ? `<p class="mt-2 rounded-xl bg-slate-50 px-3 py-2 text-[11px] text-slate-600 dark:bg-slate-950 dark:text-slate-300">${escapeHtml(check.action)}</p>` : ''}</div>`).join('');
 }
+
+/* ── Conversations ── */
+function buildConversationsRenderKey(data) {
+    const clients = Object.keys(data || {});
+    if (clients.length === 0) return 'empty';
+    const parts = [];
+    for (const client of clients.sort()) {
+        const entries = data[client] || [];
+        const first = entries[0] || {};
+        parts.push(`${client}:${entries.length}:${first.reqId}:${first.status}:${first.durationMs}`);
+    }
+    return parts.join('|');
+}
+
+async function loadConversations() {
+    try {
+        const res = await fetch('/ui/conversations?' + getPeriodQueryString(currentPeriod), { cache: 'no-store' });
+        if (!res.ok) throw new Error('Conversations HTTP ' + res.status);
+        const data = await res.json();
+        const key = buildConversationsRenderKey(data);
+        if (key === lastConversationsRenderKey) return;
+        lastConversationsRenderKey = key;
+        renderConversations(data);
+        updateDebugStamp('conversations', `${Object.keys(data).length} clients`);
+    } catch (e) { reportLiveError('conversations', e); }
+}
+
+function extractConversationMessages(entry) {
+    const msgs = [];
+    if (entry.details?.messages) {
+        for (const m of entry.details.messages) {
+            if (m.role === 'system') continue;
+            let content = '';
+            if (typeof m.content === 'string') content = m.content;
+            else if (Array.isArray(m.content)) content = m.content.map(c => c.type === 'text' ? c.text : c.type === 'tool_use' ? `[Tool use: ${c.name}]` : c.type === 'tool_result' ? `[Tool result]` : `[${c.type}]`).filter(Boolean).join('\n');
+            else if (m.content) content = JSON.stringify(m.content);
+            if (m.role && content) msgs.push({ role: m.role, content: truncateConversationText(content, 600) });
+        }
+    }
+    const res = entry.details?.response;
+    if (res) {
+        const resContent = res.content || (res.choices?.[0]?.message?.content);
+        if (resContent) {
+            let text = '';
+            if (typeof resContent === 'string') text = resContent;
+            else if (Array.isArray(resContent)) text = resContent.map(c => c.type === 'text' ? c.text : c.type === 'thinking' ? `[Thinking: ${(c.thinking || '').substring(0, 100)}...]` : c.type === 'tool_use' ? `[Tool call: ${c.name}]` : `[${c.type}]`).filter(Boolean).join('\n');
+            if (text) msgs.push({ role: 'assistant', content: truncateConversationText(text, 800) });
+        }
+        if (entry.details?.thinking) msgs.push({ role: 'thinking', content: truncateConversationText(entry.details.thinking, 400) });
+    }
+    return msgs;
+}
+
+function truncateConversationText(text, maxLen) {
+    if (!text || text.length <= maxLen) return text || '';
+    return text.substring(0, maxLen) + '...';
+}
+
+function renderConversations(data) {
+    const container = document.getElementById('conversationGroups');
+    const countEl = document.getElementById('conversationCount');
+    if (!container) return;
+    const clients = Object.keys(data || {});
+    const totalEntries = clients.reduce((sum, c) => sum + (data[c]?.length || 0), 0);
+    if (countEl) countEl.textContent = `${totalEntries} exchanges`;
+    if (clients.length === 0) { container.innerHTML = '<div class="text-slate-400 dark:text-slate-500 text-sm italic">No conversations yet</div>'; return; }
+    container.innerHTML = clients.sort().map(client => {
+        const entries = data[client] || [];
+        const clientLabel = client.toUpperCase();
+        const badgeColor = client === 'claude' ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300' : client === 'codex' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300';
+        return `<div class="rounded-2xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+            <div class="px-4 py-3 border-b border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/50 flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <span class="text-[11px] font-bold px-2 py-0.5 rounded-md ${badgeColor}">${clientLabel}</span>
+                    <span class="text-xs text-slate-500 dark:text-slate-400">${entries.length} request${entries.length !== 1 ? 's' : ''}</span>
+                </div>
+                <span class="text-[10px] text-slate-400 dark:text-slate-500 font-mono">newest first</span>
+            </div>
+            <div class="divide-y divide-slate-100 dark:divide-slate-800">
+                ${entries.map(entry => renderConversationEntry(entry, client)).join('')}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function renderConversationEntry(entry, client) {
+    const msgs = extractConversationMessages(entry);
+    const statusIcon = entry.status === 'success' || entry.status === 'completed' ? '✅' : '❌';
+    const endpointShort = (entry.endpoint || '').replace('/v1/', '');
+    const inTokens = entry.inputTokens || 0;
+    const outTokens = entry.outputTokens || 0;
+    const tokenText = (inTokens > 0 || outTokens > 0) ? `${formatTokenCount(inTokens)} / ${formatTokenCount(outTokens)}` : '-';
+    const hasMessages = msgs.length > 0;
+    const entryId = entry.reqId || 'entry_' + Math.random().toString(36).substr(2, 6);
+    return `<div class="px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition">
+        <div class="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mb-2">
+            <span class="font-mono">${entry.time || ''}</span>
+            <span class="text-slate-300 dark:text-slate-600">|</span>
+            <span class="font-mono truncate max-w-[160px]" title="${entry.model || ''}">${entry.model || '--'}</span>
+            <span class="text-slate-300 dark:text-slate-600">|</span>
+            <span class="font-mono">${entry.durationMs}ms</span>
+            <span class="text-slate-300 dark:text-slate-600">|</span>
+            <span class="font-mono text-[10px] text-indigo-600 dark:text-indigo-400">${tokenText}</span>
+            <span class="text-slate-300 dark:text-slate-600">|</span>
+            <span class="text-[10px]">${endpointShort}</span>
+            <span class="ml-auto">${statusIcon}</span>
+        </div>
+        ${hasMessages ? `<div class="space-y-1.5">
+            ${msgs.map(m => {
+                if (m.role === 'thinking') {
+                    return `<div class="flex gap-2"><span class="text-[10px] text-indigo-500 dark:text-indigo-400 font-bold shrink-0 w-16">THINK</span><div class="text-[11px] text-indigo-600 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/20 rounded-lg px-3 py-1.5 flex-1">${escapeHtml(m.content)}</div></div>`;
+                }
+                const roleLabel = m.role === 'user' ? 'YOU' : 'AI';
+                const roleColor = m.role === 'user' ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20' : 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20';
+                return `<div class="flex gap-2"><span class="text-[10px] font-bold ${roleColor} rounded px-1.5 py-0.5 shrink-0 self-start">${roleLabel}</span><div class="text-[11px] text-slate-700 dark:text-slate-300 leading-relaxed flex-1 whitespace-pre-wrap">${escapeHtml(m.content)}</div></div>`;
+            }).join('')}
+        </div>` : `<div class="text-[11px] text-slate-400 dark:text-slate-500 italic">No message content captured</div>`}
+        <details class="mt-1 text-[10px]">
+            <summary class="cursor-pointer text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300">Raw JSON</summary>
+            <pre class="mt-1 text-[10px] bg-slate-100 dark:bg-slate-800 rounded p-2 overflow-x-auto">${escapeHtml(prettyJson({ request: entry.details?.messages ? { messages: entry.details.messages } : null, response: entry.details?.response }))}</pre>
+        </details>
+    </div>`;
+}

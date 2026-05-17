@@ -1,34 +1,47 @@
-/* ── AI Workbench ── */
+/* ── AI Workbench (Claude Desktop 2026 + Codex CLI style) ── */
+
+/* Helper: fill prompt from welcome chips */
+function fillWorkbenchPrompt(text) {
+    const input = document.getElementById('workbenchInput');
+    if (input) { input.value = text; autoResizeTextarea(input); }
+}
+
+/* Remove welcome screen on first interaction */
+function removeWelcome() {
+    const w = document.getElementById('wbWelcome');
+    if (w) w.remove();
+}
+
+/* ── Flat-Text Message Renderer ── */
 function renderWorkbenchMessage(role, text, msgIndex) {
     const messages = document.getElementById('workbenchMessages');
     if (!messages) return;
+    removeWelcome();
     const isUser = role === 'user';
-    const bubbleClass = isUser ? 'is-user' : 'is-assistant';
-    const label = isUser ? 'You' : 'Workbench';
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const bodyHtml = isUser ? escapeHtml(text || '') : renderMarkdown(text || '');
     const contentClass = isUser ? 'whitespace-pre-wrap' : 'md-content';
     const idx = msgIndex != null ? msgIndex : Date.now();
+    const roleLabel = isUser ? 'You' : '✦ August';
+    const roleClass = isUser ? '' : 'is-assistant';
+    const copyBtn = `<button onclick="copyMessage(this)" title="Copy"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg></button>`;
+    const regenBtn = isUser ? '' : `<button onclick="regenerateMessage(this)" title="Regenerate"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg></button>`;
+
     messages.insertAdjacentHTML('beforeend', `
-        <div class="chat-bubble ${bubbleClass}" data-msg-idx="${idx}">
-            <div class="msg-actions">
-                <button onclick="copyMessage(this)" title="Copy">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
-                </button>
-                ${isUser ? '' : `<button onclick="regenerateMessage(this)" title="Regenerate">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-                </button>`}
+        <div class="wb-msg ${isUser ? 'is-user' : 'is-assistant'}" data-msg-idx="${idx}">
+            <div class="wb-msg-actions">${copyBtn}${regenBtn}</div>
+            <div class="wb-msg-header">
+                <span class="wb-msg-role ${roleClass}">${roleLabel}</span>
+                <span class="wb-msg-time">${time}</span>
             </div>
-            <div class="bubble-label">${label}</div>
-            <div class="chat-body">
+            <div class="wb-msg-body">
                 <div class="${contentClass}">${bodyHtml}</div>
-                <div class="bubble-time">${time}</div>
             </div>
         </div>
     `);
     const last = messages.lastElementChild;
     if (last) {
-        const body = last.querySelector('.chat-body > .md-content');
+        const body = last.querySelector('.wb-msg-body > .md-content');
         if (body) { highlightCodeBlocks(body); attachCopyButtons(body); }
     }
     messages.scrollTop = messages.scrollHeight;
@@ -85,10 +98,7 @@ async function ensureWorkbenchSession() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Could not create Workbench session');
     workbenchSession = data;
-    const wbMsgs = document.getElementById('workbenchMessages');
-    if (wbMsgs && wbMsgs.children.length === 0) {
-        wbMsgs.innerHTML = '<div class="chat-bubble is-assistant"><div class="bubble-label">Workbench</div><div class="chat-body"><div>The AI Workbench has full system access — it can read, write, execute commands, use MCP tools, search the web, and control your desktop. Only modifications to the proxy\'s own files require an explicit approved plan.</div></div></div>';
-    }
+    removeWelcome();
     renderWorkbenchPlan();
     setWorkbenchStatus('Ready', 'bg-emerald-400');
     return workbenchSession;
@@ -117,9 +127,9 @@ function autoResizeTextarea(el) {
 }
 
 function copyMessage(btn) {
-    const bubble = btn.closest('.chat-bubble');
-    if (!bubble) return;
-    const body = bubble.querySelector('.chat-body > div:not(.bubble-time)');
+    const msg = btn.closest('.wb-msg');
+    if (!msg) return;
+    const body = msg.querySelector('.wb-msg-body > div');
     const text = body ? body.textContent : '';
     navigator.clipboard.writeText(text).then(() => {
         const orig = btn.innerHTML;
@@ -129,8 +139,8 @@ function copyMessage(btn) {
 }
 
 function regenerateMessage(btn) {
-    const bubble = btn.closest('.chat-bubble');
-    if (!bubble) return;
+    const msg = btn.closest('.wb-msg');
+    if (!msg) return;
     sendWorkbenchMessageUI();
 }
 
@@ -140,126 +150,131 @@ function showTypingIndicator() {
     inner.innerHTML = '<span class="typing-dots"><span></span><span></span><span></span></span>';
 }
 
-/* ── Content Block Renderers ── */
-function renderThinkingBlock(thinking) {
+/* ── Thinking with Spinner + Timer (Claude-style) ── */
+let thinkContainer = null;
+let thinkStartTime = null;
+let thinkTimerInterval = null;
+
+function ensureThinkContainer() {
+    if (thinkContainer && thinkContainer.isConnected) return true;
     const messages = document.getElementById('workbenchMessages');
-    if (!messages) return;
-    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    messages.insertAdjacentHTML('beforeend', `
-        <div class="wb-thinking-block">
-            <button class="wb-thinking-toggle" onclick="this.parentElement.classList.toggle('collapsed')">
-                <svg class="wb-thinking-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
-                <span>Thinking</span>
-                <span class="wb-thinking-time">${time}</span>
-            </button>
-            <div class="wb-thinking-body">${escapeHtml(thinking)}</div>
-        </div>
-    `);
+    if (!messages) return false;
+    removeWelcome();
+    thinkStartTime = Date.now();
+    const div = document.createElement('div');
+    div.className = 'think-container';
+    div.innerHTML = '<div class="think-toggle"><span class="think-spinner"></span><span class="think-label">Thinking\u2026 <span class="think-timer">0.0s</span></span><span class="think-arrow">\u25B6</span></div><div class="think-body"></div>';
+    div.querySelector('.think-toggle').onclick = function () { this.parentElement.classList.toggle('think-open'); };
+    messages.appendChild(div);
+    thinkContainer = div;
+    // Start timer
+    const timerEl = div.querySelector('.think-timer');
+    thinkTimerInterval = setInterval(() => {
+        if (timerEl && thinkStartTime) {
+            timerEl.textContent = ((Date.now() - thinkStartTime) / 1000).toFixed(1) + 's';
+        }
+    }, 100);
     messages.scrollTop = messages.scrollHeight;
+    return true;
 }
 
-function renderToolCallBlock(name, input, id) {
-    const messages = document.getElementById('workbenchMessages');
-    if (!messages) return;
-    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const inputStr = typeof input === 'object' ? JSON.stringify(input, null, 2) : String(input || '');
-    messages.insertAdjacentHTML('beforeend', `
-        <div class="wb-tool-block" data-tool-id="${escapeHtml(id || '')}">
-            <div class="wb-tool-header">
-                <svg class="wb-tool-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-                <span class="wb-tool-name">${escapeHtml(name)}</span>
-                <span class="wb-tool-time">${time}</span>
-                <span class="wb-tool-status wb-tool-pending">running...</span>
-            </div>
-            <div class="wb-tool-args"><pre>${escapeHtml(inputStr)}</pre></div>
-        </div>
-    `);
-    messages.scrollTop = messages.scrollHeight;
+function renderThinkingDelta(text) {
+    if (!ensureThinkContainer()) return;
+    const body = thinkContainer.querySelector('.think-body');
+    body.textContent += text;
 }
 
-function updateToolResult(id, content, isError) {
-    const block = document.querySelector(`.wb-tool-block[data-tool-id="${escapeHtml(id)}"]`);
-    if (!block) return;
-    const statusEl = block.querySelector('.wb-tool-status');
-    if (statusEl) {
-        statusEl.textContent = isError ? 'error' : 'done';
-        statusEl.className = 'wb-tool-status ' + (isError ? 'wb-tool-error' : 'wb-tool-done');
+function resetThinkLine() {
+    if (thinkTimerInterval) { clearInterval(thinkTimerInterval); thinkTimerInterval = null; }
+    if (thinkContainer && thinkContainer.isConnected) {
+        // Replace spinner with done icon, finalize timer
+        const spinner = thinkContainer.querySelector('.think-spinner');
+        if (spinner) { spinner.outerHTML = '<span class="think-done-icon">\u25C9</span>'; }
+        const label = thinkContainer.querySelector('.think-label');
+        if (label && thinkStartTime) {
+            const elapsed = ((Date.now() - thinkStartTime) / 1000).toFixed(1);
+            label.textContent = `Thought for ${elapsed}s`;
+        }
     }
-    const argsEl = block.querySelector('.wb-tool-args');
-    if (argsEl && content) {
-        let display = content;
-        try { const parsed = JSON.parse(content); display = JSON.stringify(parsed, null, 2); } catch (e) {}
-        argsEl.insertAdjacentHTML('beforeend', `<div class="wb-tool-result ${isError ? 'wb-tool-result-error' : ''}"><strong>result:</strong><pre>${escapeHtml(display)}</pre></div>`);
-    }
+    thinkContainer = null;
+    thinkStartTime = null;
 }
 
-function renderSubagentBlock(task, result) {
+/* ── Tool Lines (Codex-style accent blocks) ── */
+function renderToolLine(id, name, input) {
+    resetThinkLine();
     const messages = document.getElementById('workbenchMessages');
     if (!messages) return;
-    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    messages.insertAdjacentHTML('beforeend', `
-        <div class="wb-subagent-block">
-            <div class="wb-subagent-header">
-                <svg class="wb-subagent-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
-                <span class="wb-subagent-label">Sub-agent</span>
-                <span class="wb-tool-time">${time}</span>
-            </div>
-            <div class="wb-subagent-task"><strong>Task:</strong> ${escapeHtml(task)}</div>
-            <div class="wb-subagent-result"><strong>Result:</strong><pre>${escapeHtml(result || '(no output)')}</pre></div>
-        </div>
-    `);
+    removeWelcome();
+    const inputSummary = typeof input === 'string' ? input : (input && typeof input === 'object' ? (input.path || input.command || input.query || JSON.stringify(input).slice(0, 80)) : '');
+    const div = document.createElement('div');
+    div.className = 'tool-line';
+    div.dataset.tid = id;
+    div.innerHTML = `<div class="tool-line-header"><span class="tool-icon">\u26A1</span><span class="tool-name">${escapeHtml(name)}</span><span class="tool-status running"><span class="tool-status-dot running"></span>running\u2026</span></div>${inputSummary ? `<div class="tool-input-summary">${escapeHtml(inputSummary)}</div>` : ''}`;
+    messages.appendChild(div);
     messages.scrollTop = messages.scrollHeight;
 }
 
-function renderAssistantEvents(events) {
-    const messages = document.getElementById('workbenchMessages');
-    if (!messages) return;
-    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    let textBuffer = '';
-    const flushText = () => {
-        if (!textBuffer) return;
-        messages.insertAdjacentHTML('beforeend', `
-            <div class="chat-bubble is-assistant">
-                <div class="msg-actions">
-                    <button onclick="copyMessage(this)" title="Copy">
-                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
-                    </button>
-                    <button onclick="regenerateMessage(this)" title="Regenerate">
-                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-                    </button>
-                </div>
-                <div class="bubble-label">Workbench</div>
-                <div class="chat-body">
-                    <div class="md-content">${renderMarkdown(textBuffer)}</div>
-                    <div class="bubble-time">${time}</div>
-                </div>
-            </div>
-        `);
-        const last = messages.lastElementChild;
-        if (last) { const body = last.querySelector('.chat-body > .md-content'); if (body) { highlightCodeBlocks(body); attachCopyButtons(body); } }
-        textBuffer = '';
-    };
-    for (const evt of events) {
-        if (evt.type === 'text') { textBuffer += (textBuffer ? '\n\n' : '') + evt.content; }
-        else if (evt.type === 'thinking') { flushText(); renderThinkingBlock(evt.content); }
-        else if (evt.type === 'tool_use') { flushText(); renderToolCallBlock(evt.name, evt.input, evt.id); }
-        else if (evt.type === 'tool_result') { updateToolResult(evt.id, evt.content, evt.is_error); }
-        else if (evt.type === 'subagent') { flushText(); renderSubagentBlock(evt.task, evt.result); }
+function updateToolLine(id, content, isError) {
+    const el = document.querySelector('.tool-line[data-tid="' + id.replace(/"/g, '\\"') + '"]');
+    if (!el) return;
+    const status = el.querySelector('.tool-status');
+    const dot = el.querySelector('.tool-status-dot');
+    if (isError) {
+        el.classList.add('is-error');
+        if (status) { status.className = 'tool-status error'; status.innerHTML = '<span class="tool-status-dot"></span>\u2717 error'; }
+    } else {
+        el.classList.add('is-done');
+        if (status) { status.className = 'tool-status done'; status.innerHTML = '<span class="tool-status-dot"></span>\u2713 done'; }
     }
-    flushText();
-    messages.scrollTop = messages.scrollHeight;
+    if (dot) dot.classList.remove('running');
 }
 
-function renderContentBlocks(content) {
-    const messages = document.getElementById('workbenchMessages');
-    if (!messages) return;
-    const textParts = content.filter(b => b.type === 'text').map(b => b.text || '');
-    const thinkingParts = content.filter(b => b.type === 'thinking');
-    const toolUses = content.filter(b => b.type === 'tool_use');
-    const text = textParts.join('\n\n');
-    if (text) renderWorkbenchMessage('assistant', text);
-    thinkingParts.forEach(b => renderThinkingBlock(b.thinking));
-    toolUses.forEach(b => renderToolCallBlock(b.name, b.input, b.id));
+/* ── SSE Event Handler ── */
+function handleSSEEvent(event, data) {
+    switch (event) {
+        case 'thinking': renderThinkingDelta(data.content); break;
+        case 'tool_use': renderToolLine(data.id, data.name, data.input); break;
+        case 'tool_result': updateToolLine(data.id, data.content, data.is_error); break;
+        case 'text':
+            resetThinkLine();
+            renderWorkbenchMessage('assistant', data.content);
+            break;
+        case 'session':
+            workbenchSession = data;
+            renderWorkbenchPlan();
+            if (workbenchSession.approved) setWorkbenchStatus('Plan approved', 'bg-emerald-400');
+            else if (workbenchSession.plan) setWorkbenchStatus('Plan pending', 'bg-amber-400');
+            else setWorkbenchStatus('Ready', 'bg-emerald-400');
+            break;
+        case 'error':
+            resetThinkLine();
+            renderWorkbenchMessage('assistant', 'Error: ' + data.message);
+            setWorkbenchStatus('Error.', 'bg-red-400');
+            break;
+        case 'done': break;
+    }
+}
+
+async function readSSEStream(reader) {
+    const dec = new TextDecoder();
+    let buf = '', evt = '', dat = '';
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split('\n');
+        buf = parts.pop() || '';
+        for (const line of parts) {
+            if (line.startsWith('event: ')) evt = line.slice(7).trim();
+            else if (line.startsWith('data: ')) dat = line.slice(6).trim();
+            else if (line === '' && evt && dat) {
+                try { handleSSEEvent(evt, JSON.parse(dat)); } catch (e) {}
+                evt = ''; dat = '';
+            }
+        }
+    }
+    if (evt && dat) { try { handleSSEEvent(evt, JSON.parse(dat)); } catch (e) {} }
 }
 
 async function sendWorkbenchMessageUI() {
@@ -272,7 +287,8 @@ async function sendWorkbenchMessageUI() {
     input.style.height = 'auto';
     if (sendBtn) sendBtn.disabled = true;
     renderWorkbenchMessage('user', message);
-    showTypingIndicator();
+    setWorkbenchStatus('Working\u2026', 'bg-amber-400');
+    lastThinkLine = null;
     try {
         const res = await fetch('/ui/workbench/chat', {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
@@ -281,21 +297,16 @@ async function sendWorkbenchMessageUI() {
                 message
             })
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Workbench request failed');
-        workbenchSession = data.session || workbenchSession;
-        if (data.events && data.events.length > 0) {
-            renderAssistantEvents(data.events);
-        } else if (data.content && data.content.length > 0) {
-            renderContentBlocks(data.content);
-        } else {
-            renderWorkbenchMessage('assistant', data.assistant || '(no text response)');
+        if (!res.ok) {
+            const errText = await res.text();
+            let errMsg = 'Workbench request failed';
+            try { errMsg = JSON.parse(errText).error || errMsg; } catch (e) { errMsg = errText || errMsg; }
+            throw new Error(errMsg);
         }
+        await readSSEStream(res.body.getReader());
         renderWorkbenchPlan();
-        if (workbenchSession.approved) setWorkbenchStatus('Plan approved', 'bg-emerald-400');
-        else if (workbenchSession.plan) setWorkbenchStatus('Plan pending', 'bg-amber-400');
-        else setWorkbenchStatus('Ready', 'bg-emerald-400');
     } catch (e) {
+        resetThinkLine();
         renderWorkbenchMessage('assistant', e.message);
         setWorkbenchStatus('Error.', 'bg-red-400');
     } finally {
@@ -331,7 +342,16 @@ async function resetWorkbenchUI() {
     workbenchSession = data;
     const messages = document.getElementById('workbenchMessages');
     if (messages) {
-        messages.innerHTML = '<div class="chat-bubble is-assistant"><div class="bubble-label">Workbench</div><div class="chat-body"><div>New session started. All tools available — read/write/execute anywhere on the system. Proxy system modifications require an approved plan. Use workbench_submit_plan to request approval for proxy modifications.</div></div></div>';
+        messages.innerHTML = `<div class="wb-welcome" id="wbWelcome">
+            <div class="wb-welcome-icon">&#10022;</div>
+            <div class="wb-welcome-title">August AI</div>
+            <div class="wb-welcome-desc">New session started. Full system access &mdash; read, write, execute, search, and control.</div>
+            <div class="wb-welcome-chips">
+                <button class="wb-welcome-chip" onclick="fillWorkbenchPrompt('Refactor the auth module')">Refactor code</button>
+                <button class="wb-welcome-chip" onclick="fillWorkbenchPrompt('Debug why tests are failing')">Debug tests</button>
+                <button class="wb-welcome-chip" onclick="fillWorkbenchPrompt('Search the web for latest best practices')">Web search</button>
+            </div>
+        </div>`;
     }
     renderWorkbenchPlan();
     setWorkbenchStatus('Ready', 'bg-emerald-400');

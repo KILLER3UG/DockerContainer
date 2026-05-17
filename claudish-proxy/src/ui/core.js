@@ -24,6 +24,7 @@ let lastRequestsRenderKey = '';
 let lastStatsRenderKey = '';
 let lastInspectorRenderKey = '';
 let lastThinkingRenderKey = '';
+let lastConversationsRenderKey = '';
 let pollHandles = [];
 let debugErrorCount = 0;
 let liveStream = null;
@@ -44,7 +45,7 @@ function sectionVisible(...sections) {
 }
 
 function updateDebugStamp(kind, message) {
-    const idMap = { requests: 'debugRequestsAt', activity: 'debugActivityAt', inspector: 'debugInspectorAt' };
+    const idMap = { requests: 'debugRequestsAt', activity: 'debugActivityAt', inspector: 'debugInspectorAt', conversations: 'debugConversationsAt' };
     const el = document.getElementById(idMap[kind]);
     if (!el) return;
     const now = new Date();
@@ -79,6 +80,35 @@ const DEFAULT_CLAUDE_PUBLIC_ALIAS = 'claude-opus-4-6';
 const DEFAULT_REQUEST_LOG_LIMIT = 5000;
 const DEFAULT_PENDING_TIMEOUT_MINUTES = 10;
 
+/* ── Sidebar Collapse ── */
+function toggleSidebar() {
+    const isDesktop = window.innerWidth >= 1024;
+    const layout = document.getElementById('appLayout');
+    const sidebar = document.getElementById('appSidebar');
+    const backdrop = document.getElementById('sidebarBackdrop');
+    if (isDesktop) {
+        /* Desktop: toggle collapsed icon strip */
+        const collapsed = layout.classList.toggle('sidebar-collapsed');
+        localStorage.setItem('claudish-sidebar-collapsed', collapsed);
+    } else {
+        /* Mobile: slide-over overlay */
+        const opening = !sidebar.classList.contains('sidebar-open');
+        sidebar.classList.toggle('sidebar-open', opening);
+        backdrop?.classList.toggle('open', opening);
+    }
+}
+function closeSidebarMobile() {
+    document.getElementById('appSidebar')?.classList.remove('sidebar-open');
+    document.getElementById('sidebarBackdrop')?.classList.remove('open');
+}
+function initSidebar() {
+    const collapsed = localStorage.getItem('claudish-sidebar-collapsed') === 'true';
+    if (collapsed) {
+        const layout = document.getElementById('appLayout');
+        if (layout) layout.classList.add('sidebar-collapsed');
+    }
+}
+
 /* ── Navigation ── */
 function switchSection(section) {
     activeSection = section;
@@ -86,6 +116,13 @@ function switchSection(section) {
     document.querySelectorAll('.dashboard-section').forEach(el => {
         el.classList.toggle('hidden', el.id !== 'section-' + section);
     });
+    /* Show Gateway Dashboard header only on Overview tab */
+    const dashHeader = document.getElementById('dashboardHeader');
+    if (dashHeader) {
+        dashHeader.classList.toggle('hidden', section !== 'overview');
+    }
+    /* Close mobile sidebar overlay on nav */
+    closeSidebarMobile();
     document.querySelectorAll('.section-nav').forEach(btn => {
         const isActive = btn.dataset.section === section;
         if (btn.classList.contains('rounded-full')) {
@@ -110,6 +147,7 @@ function switchSection(section) {
     if (sectionVisible('workbench')) { ensureWorkbenchSession(); loadComputerUseStatus(); }
     if (sectionVisible('inspector')) loadInspector();
     if (sectionVisible('thinking')) loadThinking();
+    if (sectionVisible('conversations')) loadConversations();
     if (sectionVisible('memory')) loadMemoryItemsUI();
     if (sectionVisible('mcp')) loadMcpSkillsUI();
     if (sectionVisible('august')) loadAugustUI();
@@ -428,15 +466,28 @@ function initDarkMode() {
     const saved = localStorage.getItem('claudish-dark');
     const shouldBeDark = saved === 'true';
     const html = document.documentElement;
-    if (shouldBeDark) { html.classList.add('dark'); document.getElementById('moonIcon').classList.add('hidden'); document.getElementById('sunIcon').classList.remove('hidden'); }
-    else { html.classList.remove('dark'); document.getElementById('moonIcon').classList.remove('hidden'); document.getElementById('sunIcon').classList.add('hidden'); }
+    if (shouldBeDark) {
+        html.classList.add('dark');
+        document.getElementById('moonIcon')?.classList.add('hidden');
+        document.getElementById('sunIcon')?.classList.remove('hidden');
+        document.querySelector('.sidebar-moon')?.classList.add('hidden');
+        document.querySelector('.sidebar-sun')?.classList.remove('hidden');
+    } else {
+        html.classList.remove('dark');
+        document.getElementById('moonIcon')?.classList.remove('hidden');
+        document.getElementById('sunIcon')?.classList.add('hidden');
+        document.querySelector('.sidebar-moon')?.classList.remove('hidden');
+        document.querySelector('.sidebar-sun')?.classList.add('hidden');
+    }
 }
 function toggleDarkMode() {
     const html = document.documentElement;
     const isDark = html.classList.toggle('dark');
     localStorage.setItem('claudish-dark', isDark);
-    document.getElementById('moonIcon').classList.toggle('hidden');
-    document.getElementById('sunIcon').classList.toggle('hidden');
+    document.getElementById('moonIcon')?.classList.toggle('hidden');
+    document.getElementById('sunIcon')?.classList.toggle('hidden');
+    document.querySelector('.sidebar-moon')?.classList.toggle('hidden');
+    document.querySelector('.sidebar-sun')?.classList.toggle('hidden');
 }
 
 /* ── Test Result Modal ── */

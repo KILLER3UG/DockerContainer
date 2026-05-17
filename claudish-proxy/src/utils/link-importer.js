@@ -174,6 +174,11 @@ function packageJsonToMcp(pkg, { enableMcp = false } = {}) {
 }
 
 function parseSkillMarkdown(text, sourceUrl) {
+    const trimmed = text.trim();
+    // Reject content that isn't valid markdown (must start with frontmatter or a heading)
+    if (!trimmed.startsWith('---') && !trimmed.startsWith('# ')) {
+        return null;
+    }
     const frontmatter = text.match(/^---\s*([\s\S]*?)\s*---/);
     const nameMatch = frontmatter?.[1]?.match(/^name:\s*["']?([^"'\n]+)["']?/m) ||
         text.match(/^#\s+(.+)$/m);
@@ -183,7 +188,7 @@ function parseSkillMarkdown(text, sourceUrl) {
         name,
         description: descriptionMatch?.[1] || `Imported from ${sourceUrl}`,
         trigger: `When the user requests ${name} behavior or this imported capability applies.`,
-        instructions: text.trim(),
+        instructions: trimmed,
         enabled: true
     };
 }
@@ -251,7 +256,9 @@ function analyzeCapabilityText(text, sourceUrl, { enableMcp = false } = {}) {
     }
 
     if (/^\s*#|^---[\s\S]*?name:/m.test(text) && /skill|instructions|trigger|workflow|when/i.test(text)) {
-        imported.skills.push(parseSkillMarkdown(text, sourceUrl));
+        const skill = parseSkillMarkdown(text, sourceUrl);
+        if (!skill) return imported;
+        imported.skills.push(skill);
         imported.plugins.push({
             name: imported.skills[0].name,
             description: imported.skills[0].description,

@@ -10,7 +10,28 @@ const { getCoworkToolDefinitions, isCoworkToolName, executeCoworkToolCall } = re
 const { executeManagedWebTool } = require('../../src/utils/local-web');
 const { validateToolArguments, buildValidationErrorToolMessage } = require('../../src/utils/validator');
 const { LlmAdapterBase } = require('../../src/adapters/base');
-const { buildSystemBlocks: buildContextSystemBlocks } = require('../../src/utils/context-builder');
+const { buildSystemBlocks: buildContextSystemBlocks, isMiniMaxTarget, MINIMAX_M2_7_CODING_CONTRACT } = require('../../src/utils/context-builder');
+const {
+    MANAGED_WEB_TOOL_NAMES,
+    isManagedWebToolName,
+    getManagedWebToolKind,
+    getManagedAnthropicWebToolDefinitions,
+    sanitizeAnthropicToolDefinition,
+    dedupeAndCanonicalizeAnthropicTools,
+    getCanonicalManagedAnthropicWebTools,
+    openAiToAnthropicToolDefinition,
+    anthropicToOpenAiToolDefinition,
+    getCanonicalCoworkAnthropicTools,
+    getCanonicalManagedOpenAiWebTools,
+    getProxyOpenAiToolDefinitions,
+    getToolDefinitionName,
+    appendMissingAnthropicTools,
+    appendMissingOpenAiTools,
+    isProxyManagedLocalToolName,
+    rememberManagedLocalToolDefinitions,
+    buildClientToolGuidance,
+    isBrowserAutomationToolName
+} = require('./anthropic-tools');
 
 const CLAUDE_PUBLIC_MODEL_ALIAS = 'claude-opus-4-6';
 const KNOWN_CLAUDE_PUBLIC_MODEL_ALIASES = new Set([
@@ -21,14 +42,6 @@ const KNOWN_CLAUDE_PUBLIC_MODEL_ALIASES = new Set([
     'claude-sonnet-4-6'
 ]);
 const adapterBase = new LlmAdapterBase({ profileName: 'claude', logPrefix: 'Anthropic' });
-const MANAGED_WEB_TOOL_NAMES = new Set([
-    'WebSearch',
-    'WebFetch',
-    'web_search',
-    'web_fetch',
-    'mcp__workspace__web_search',
-    'mcp__workspace__web_fetch'
-]);
 
 function isMiniMaxModel(model) {
     return adapterBase.isMiniMaxModel(model);
@@ -141,361 +154,6 @@ function buildAnthropicSystemBlocks(system) {
         console.log(`[Proxy System Prompt]: Anthropic system blocks total=${totalChars} chars`);
     }
     return blocks;
-}
-
-function isManagedWebToolName(name) {
-    return typeof name === 'string' && MANAGED_WEB_TOOL_NAMES.has(name);
-}
-
-function getManagedWebToolKind(name) {
-    if (typeof name !== 'string') return null;
-    if (name === 'WebSearch' || name === 'web_search' || name === 'mcp__workspace__web_search') {
-        return 'search';
-    }
-    if (name === 'WebFetch' || name === 'web_fetch' || name === 'mcp__workspace__web_fetch') {
-        return 'fetch';
-    }
-    return null;
-}
-
-function getManagedAnthropicWebToolDefinitions() {
-    return [
-        {
-            name: 'WebSearch',
-            description: 'Search the public web for relevant pages. Use only for external/public information. Do not combine this tool with any other tool in the same turn.',
-            input_schema: {
-                type: 'object',
-                properties: {
-                    query: {
-                        type: 'string',
-                        description: 'The web search query.'
-                    },
-                    prompt: {
-                        type: 'string',
-                        description: 'Compatibility alias for query when a stale client schema still sends prompt.'
-                    },
-                    max_results: {
-                        type: 'integer',
-                        description: 'Maximum number of results to return.'
-                    }
-                },
-                required: ['query']
-            }
-        },
-        {
-            name: 'WebFetch',
-            description: 'Fetch and summarize a public webpage by URL. Private/local network addresses are blocked. Do not combine this tool with any other tool in the same turn.',
-            input_schema: {
-                type: 'object',
-                properties: {
-                    url: {
-                        type: 'string',
-                        description: 'The public HTTP or HTTPS URL to fetch.'
-                    },
-                    prompt: {
-                        type: 'string',
-                        description: 'Compatibility alias for url when a stale client schema still sends prompt containing the URL.'
-                    }
-                },
-                required: ['url']
-            }
-        },
-        {
-            name: 'mcp__workspace__web_search',
-            description: 'Search the public web for relevant pages. Workspace-compatible alias for third-party Claude clients. Do not combine this tool with any other tool in the same turn.',
-            input_schema: {
-                type: 'object',
-                properties: {
-                    query: {
-                        type: 'string',
-                        description: 'The web search query.'
-                    },
-                    prompt: {
-                        type: 'string',
-                        description: 'Compatibility alias for query when a stale client schema still sends prompt.'
-                    },
-                    max_results: {
-                        type: 'integer',
-                        description: 'Maximum number of results to return.'
-                    }
-                },
-                required: ['query']
-            }
-        },
-        {
-            name: 'mcp__workspace__web_fetch',
-            description: 'Fetch and summarize a public webpage by URL. Workspace-compatible alias for third-party Claude clients. Private/local network addresses are blocked. Do not combine this tool with any other tool in the same turn.',
-            input_schema: {
-                type: 'object',
-                properties: {
-                    url: {
-                        type: 'string',
-                        description: 'The public HTTP or HTTPS URL to fetch.'
-                    },
-                    prompt: {
-                        type: 'string',
-                        description: 'Compatibility alias for url when a stale client schema still sends prompt containing the URL.'
-                    }
-                },
-                required: ['url']
-            }
-        }
-    ];
-}
-
-function sanitizeAnthropicToolDefinition(tool) {
-    if (!tool || typeof tool !== 'object') return null;
-
-    let normalized = tool;
-    if (tool.type === 'function' && tool.function && typeof tool.function === 'object') {
-        normalized = {
-            name: tool.function.name,
-            description: tool.function.description || '',
-            input_schema: tool.function.parameters || { type: 'object', properties: {} }
-        };
-    }
-
-    const name = typeof normalized.name === 'string' ? normalized.name.trim() : '';
-    if (!name) return null;
-
-    let inputSchema = normalized.input_schema;
-    if (!inputSchema || typeof inputSchema !== 'object' || Array.isArray(inputSchema)) {
-        inputSchema = { type: 'object', properties: {} };
-    }
-    if (!inputSchema.type) inputSchema.type = 'object';
-    if (inputSchema.type === 'object' && (!inputSchema.properties || typeof inputSchema.properties !== 'object' || Array.isArray(inputSchema.properties))) {
-        inputSchema.properties = {};
-    }
-
-    return {
-        name,
-        description: typeof normalized.description === 'string' ? normalized.description : '',
-        input_schema: inputSchema
-    };
-}
-
-function dedupeAndCanonicalizeAnthropicTools(tools) {
-    const sanitizedTools = [];
-    let includeManagedSearch = false;
-    let includeManagedFetch = false;
-    const seenNames = new Set();
-
-    for (const rawTool of Array.isArray(tools) ? tools : []) {
-        const tool = sanitizeAnthropicToolDefinition(rawTool);
-        if (!tool) continue;
-        if (isBrowserAutomationToolName(tool.name)) continue;
-
-        const managedKind = getManagedWebToolKind(tool.name);
-        if (managedKind === 'search') {
-            includeManagedSearch = true;
-            continue;
-        }
-        if (managedKind === 'fetch') {
-            includeManagedFetch = true;
-            continue;
-        }
-
-        if (seenNames.has(tool.name)) continue;
-        seenNames.add(tool.name);
-        sanitizedTools.push(tool);
-    }
-
-    const canonicalManagedTools = getManagedAnthropicWebToolDefinitions().filter(tool => {
-        const kind = getManagedWebToolKind(tool.name);
-        return (kind === 'search' && includeManagedSearch) || (kind === 'fetch' && includeManagedFetch);
-    });
-
-    for (const tool of canonicalManagedTools) {
-        if (seenNames.has(tool.name)) continue;
-        seenNames.add(tool.name);
-        sanitizedTools.push(tool);
-    }
-
-    return sanitizedTools;
-}
-
-function getCanonicalManagedAnthropicWebTools() {
-    return getManagedAnthropicWebToolDefinitions().filter(tool =>
-        tool.name === 'WebSearch' || tool.name === 'WebFetch'
-    );
-}
-
-function openAiToAnthropicToolDefinition(tool) {
-    if (tool && tool.type === 'function') {
-        return {
-            name: tool.function.name,
-            description: tool.function.description || '',
-            input_schema: tool.function.parameters || { type: 'object', properties: {} }
-        };
-    }
-    return tool;
-}
-
-function anthropicToOpenAiToolDefinition(tool) {
-    return {
-        type: 'function',
-        function: {
-            name: tool.name,
-            description: tool.description || '',
-            parameters: tool.input_schema || { type: 'object', properties: {} },
-            strict: tool.strict
-        }
-    };
-}
-
-function getCanonicalCoworkAnthropicTools() {
-    return getCoworkToolDefinitions().map(openAiToAnthropicToolDefinition);
-}
-
-function getCanonicalManagedOpenAiWebTools() {
-    return getCanonicalManagedAnthropicWebTools().map(anthropicToOpenAiToolDefinition);
-}
-
-function getProxyOpenAiToolDefinitions() {
-    return [
-        ...getMcpToolDefinitions(),
-        ...getCoworkToolDefinitions(),
-        ...getAugustToolDefinitions(),
-        ...getCanonicalManagedOpenAiWebTools()
-    ];
-}
-
-function getToolDefinitionName(tool) {
-    return tool?.function?.name || tool?.name || '';
-}
-
-function appendMissingAnthropicTools(targetTools, extraTools) {
-    const seen = new Set((targetTools || []).map(getToolDefinitionName).filter(Boolean));
-    const appended = [];
-    for (const tool of extraTools || []) {
-        const name = getToolDefinitionName(tool);
-        if (!name || seen.has(name)) continue;
-        seen.add(name);
-        targetTools.push(tool);
-        appended.push(name);
-    }
-    return appended;
-}
-
-function appendMissingOpenAiTools(targetTools, extraTools) {
-    const seen = new Set((targetTools || []).map(getToolDefinitionName).filter(Boolean));
-    const appended = [];
-    for (const tool of extraTools || []) {
-        const name = getToolDefinitionName(tool);
-        if (!name || seen.has(name)) continue;
-        seen.add(name);
-        targetTools.push(tool);
-        appended.push(name);
-    }
-    return appended;
-}
-
-function isProxyManagedLocalToolName(name) {
-    return (
-        isManagedWebToolName(name) ||
-        isCoworkToolName(name) ||
-        isAugustToolName(name) ||
-        isMcpToolName(name)
-    );
-}
-
-function rememberManagedLocalToolDefinitions(tools, ctx) {
-    if (!ctx?.managedLocalToolNames) return [];
-    const names = [];
-    for (const tool of tools || []) {
-        const name = getToolDefinitionName(tool);
-        if (!isProxyManagedLocalToolName(name)) continue;
-        ctx.managedLocalToolNames.add(name);
-        names.push(name);
-    }
-    return names;
-}
-
-async function executeManagedProxyTool(toolName, args) {
-    if (isManagedWebToolName(toolName)) {
-        const localName = (
-            toolName === 'WebSearch' ||
-            toolName === 'web_search' ||
-            toolName === 'mcp__workspace__web_search'
-        ) ? 'web_search' : 'web_fetch';
-        logActivity('WEB', `${toolName} executed locally`);
-        return executeManagedWebTool(localName, args || {});
-    }
-    if (isCoworkToolName(toolName)) {
-        logActivity('COWORK', `${toolName} executed by proxy compatibility layer`);
-        return executeCoworkToolCall(toolName, args || {});
-    }
-    if (isAugustToolName(toolName)) {
-        logActivity('AUGUST', `${toolName} executed locally`);
-        return executeAugustToolCall(toolName, args);
-    }
-    if (isMcpToolName(toolName)) {
-        return executeMcpToolCall(toolName, args);
-    }
-    throw new Error(`Unsupported managed proxy tool: ${toolName}`);
-}
-
-function buildMinimaxAwareSystem(system, targetUrl, model, clientId) {
-    const backendHint = isMiniMaxModel(model) || (targetUrl && targetUrl.toLowerCase().includes('minimax'))
-        ? 'MiniMax-M2.7'
-        : model;
-    const blocks = buildContextSystemBlocks(system, {
-        model: backendHint,
-        targetUrl,
-        includeWindowsContext: false,
-        clientId: clientId || 'unknown'
-    });
-    const totalChars = blocks.reduce((sum, block) => sum + (block.text || '').length, 0);
-    console.log(`[Proxy System Prompt]: August core injected. Total system prompt length=${totalChars} chars`);
-    return blocks;
-}
-
-function buildClientToolGuidance(clientTools) {
-    if (!Array.isArray(clientTools) || clientTools.length === 0) return '';
-    const visibleNames = clientTools
-        .map(tool => tool?.name || tool?.function?.name)
-        .filter(Boolean);
-    if (visibleNames.length === 0) return '';
-
-    const webLike = visibleNames.filter(name =>
-        /web[_-]?fetch|web[_-]?search|fetch/i.test(name)
-    );
-    const coworkLike = visibleNames.filter(name => isCoworkToolName(name));
-
-    const lines = [
-        '[CLIENT TOOL INVENTORY]',
-        `Visible client tools include: ${visibleNames.join(', ')}.`
-    ];
-
-    if (webLike.length > 0) {
-        lines.push(`For web access, prefer these visible client-compatible tool names first: ${webLike.join(', ')}.`);
-        lines.push('If one of those visible web-fetch tools fails or is blocked, retry the research using the same compatible web-fetch/search name that remains available in the tool list instead of saying browsing is unavailable.');
-        lines.push('Do not switch to browser automation for ordinary public web research while a compatible web fetch/search tool is available.');
-        lines.push('Once a compatible web fetch/search tool returns content, summarize that content directly instead of switching to august__bash or another refetch tool.');
-    }
-
-    if (coworkLike.length > 0) {
-        lines.push(`Cowork compatibility tools are available through the proxy: ${coworkLike.join(', ')}.`);
-        lines.push('If a Cowork server is reported as unavailable by older client context, still use the visible mcp__cowork__* tool names because Claudish Proxy resolves them locally.');
-        lines.push('For Cowork delete-permission calls, remember the compatibility layer only checks safe roots and never deletes files by itself.');
-    }
-
-    return lines.join('\n');
-}
-
-function isBrowserAutomationToolName(name) {
-    if (typeof name !== 'string') return false;
-    const normalized = name.toLowerCase();
-    return (
-        normalized.includes('list_connected_browsers') ||
-        normalized.includes('browser_navigate') ||
-        normalized.includes('browser_snapshot') ||
-        normalized.includes('browser_click') ||
-        normalized.includes('browser_type') ||
-        normalized.includes('browser_wait') ||
-        normalized.includes('browser') ||
-        normalized.includes('chrome')
-    );
 }
 
 // ── Mid-session drift prevention ──
@@ -1072,13 +730,26 @@ async function translateMessages(anthropicMessages, ctx) {
     return merged;
 }
 
+function buildMinimaxAwareSystem(system, targetUrl, model, clientId) {
+    if (!isMiniMaxTarget({ model, targetUrl })) return system;
+    const text = systemBlocksToText(system);
+    const contract = typeof clientId === 'string' && clientId ? `<system variant="minimax_m2_7_coding_contract" client="${clientId}">\n${MINIMAX_M2_7_CODING_CONTRACT}\n</system>` : MINIMAX_M2_7_CODING_CONTRACT;
+    return text ? `${text}\n\n${contract}` : contract;
+}
+
 // ── Build OpenAI request from Anthropic request ──
 async function buildOpenAIRequest(aReq, ctx, cfg, clientId) {
     const openaiMessages = [];
     const backendModel = getClaudeBackendModel(cfg, aReq.model);
 
-    // System prompt
-    const effectiveSystem = buildMinimaxAwareSystem(aReq.system, cfg.targetUrl, backendModel, clientId);
+    // System prompt: AUGUST context first, then MiniMax contract for MiniMax targets
+    const augustSystem = buildContextSystemBlocks(aReq.system, {
+        model: backendModel,
+        targetUrl: cfg.targetUrl,
+        includeMiniMaxContract: false,
+        clientId
+    });
+    const effectiveSystem = buildMinimaxAwareSystem(augustSystem, cfg.targetUrl, backendModel, clientId);
     const systemPrompt = buildOpenAISystemPrompt(effectiveSystem);
     openaiMessages.push({ role: 'system', content: systemPrompt });
 
@@ -1232,28 +903,50 @@ function buildAnthropicUpstreamRequest(aReq, cfg, upstreamModelOverride, clientI
         messages: Array.isArray(aReq.messages) ? aReq.messages : []
     };
 
-    // Inject the M2.7 coding contract for MiniMax targets; pass through unchanged for others
-    upstreamReq.system = buildMinimaxAwareSystem(aReq.system, cfg.targetUrl, upstreamReq.model, clientId);
+    // AUGUST context first, then MiniMax contract for MiniMax targets
+    const augustSystem = buildContextSystemBlocks(aReq.system, {
+        model: upstreamReq.model,
+        targetUrl: cfg.targetUrl,
+        includeMiniMaxContract: false,
+        clientId
+    });
+    upstreamReq.system = buildMinimaxAwareSystem(augustSystem, cfg.targetUrl, upstreamReq.model, clientId);
 
     // Mid-session drift prevention: inject rule reminders every 8 tool-result turns
-    if (isMiniMaxModel(upstreamReq.model)) {
+    if (isMiniMaxModel(upstreamReq.model) || isMiniMaxTarget({ targetUrl: cfg.targetUrl })) {
         if (shouldInjectAugustReminder(upstreamReq.messages)) {
             const lastIdx = upstreamReq.messages.length - 1;
-            upstreamReq.messages = [
-                ...upstreamReq.messages.slice(0, lastIdx),
-                AUGUST_REMINDER,
-                upstreamReq.messages[lastIdx]
-            ];
-            console.log(`[Proxy Reminder]: Injected AUGUST personality reminder at message index ${lastIdx}`);
+            const lastMsg = upstreamReq.messages[lastIdx];
+            const hasToolResult = lastMsg?.role === 'tool' ||
+                (Array.isArray(lastMsg?.content) && lastMsg.content.some(b => b?.type === 'tool_result'));
+            if (hasToolResult) {
+                upstreamReq.messages.push(AUGUST_REMINDER);
+                console.log(`[Proxy Reminder]: Appended AUGUST personality reminder after tool_result`);
+            } else {
+                upstreamReq.messages = [
+                    ...upstreamReq.messages.slice(0, lastIdx),
+                    AUGUST_REMINDER,
+                    lastMsg
+                ];
+                console.log(`[Proxy Reminder]: Injected AUGUST personality reminder at message index ${lastIdx}`);
+            }
         }
         if (shouldInjectReminderMessage(upstreamReq.messages)) {
             const lastIdx = upstreamReq.messages.length - 1;
-            upstreamReq.messages = [
-                ...upstreamReq.messages.slice(0, lastIdx),
-                RULE_REMINDER_MESSAGE,
-                upstreamReq.messages[lastIdx]
-            ];
-            console.log(`[Proxy Reminder]: Injected mid-session rule reminder at message index ${lastIdx}`);
+            const lastMsg = upstreamReq.messages[lastIdx];
+            const hasToolResult = lastMsg?.role === 'tool' ||
+                (Array.isArray(lastMsg?.content) && lastMsg.content.some(b => b?.type === 'tool_result'));
+            if (hasToolResult) {
+                upstreamReq.messages.push(RULE_REMINDER_MESSAGE);
+                console.log(`[Proxy Reminder]: Appended mid-session rule reminder after tool_result`);
+            } else {
+                upstreamReq.messages = [
+                    ...upstreamReq.messages.slice(0, lastIdx),
+                    RULE_REMINDER_MESSAGE,
+                    lastMsg
+                ];
+                console.log(`[Proxy Reminder]: Injected mid-session rule reminder at message index ${lastIdx}`);
+            }
         }
     }
 
@@ -1864,7 +1557,7 @@ async function handleMessages(req, res, cleanPath, reqId) {
 
                             if (parsed.stop_reason === 'end_turn') {
                                 const { extractAndSaveMemories } = require('../utils/auto-memory');
-                                extractAndSaveMemories(aReq.messages, parsed, cfg, upstreamModel, clientId).catch(() => {});
+                                extractAndSaveMemories(aReq.messages, parsed, cfg, upstreamModel, clientId).catch(e => console.warn('[Auto-Memory] Extraction failed:', e.message));
                             }
                             return; // finishRequest() runs in finally
                         }
@@ -1875,7 +1568,7 @@ async function handleMessages(req, res, cleanPath, reqId) {
                         // --- AUTO-MEMORY BACKGROUND EXTRACTION ---
                         if (parsed.stop_reason === 'end_turn') {
                             const { extractAndSaveMemories } = require('../utils/auto-memory');
-                            extractAndSaveMemories(aReq.messages, parsed, cfg, upstreamModel, clientId).catch(() => {});
+                            extractAndSaveMemories(aReq.messages, parsed, cfg, upstreamModel, clientId).catch(e => console.warn('[Auto-Memory] Extraction failed:', e.message));
                         }
                     } catch (e) {
                         console.warn('[Proxy SSE Parse Warning]: Failed to reconstruct Anthropic response for capture:', e.message);
@@ -1903,7 +1596,7 @@ async function handleMessages(req, res, cleanPath, reqId) {
                             // --- AUTO-MEMORY BACKGROUND EXTRACTION ---
                             if (parsed.stop_reason === 'end_turn') {
                                 const { extractAndSaveMemories } = require('../utils/auto-memory');
-                                extractAndSaveMemories(aReq.messages, parsed, cfg, upstreamModel, clientId).catch(() => {});
+                                extractAndSaveMemories(aReq.messages, parsed, cfg, upstreamModel, clientId).catch(e => console.warn('[Auto-Memory] Extraction failed:', e.message));
                             }
                             return; // finishRequest() runs in finally
                         }
@@ -1911,7 +1604,7 @@ async function handleMessages(req, res, cleanPath, reqId) {
                         // --- AUTO-MEMORY BACKGROUND EXTRACTION (Non-stream tool resolution case) ---
                         if (parsed.stop_reason === 'end_turn') {
                             const { extractAndSaveMemories } = require('../utils/auto-memory');
-                            extractAndSaveMemories(aReq.messages, parsed, cfg, upstreamModel, clientId).catch(() => {});
+                            extractAndSaveMemories(aReq.messages, parsed, cfg, upstreamModel, clientId).catch(e => console.warn('[Auto-Memory] Extraction failed:', e.message));
                         }
                     } catch (e) { /* ignore */ }
                 }
@@ -2001,7 +1694,7 @@ async function handleMessages(req, res, cleanPath, reqId) {
             // --- AUTO-MEMORY BACKGROUND EXTRACTION (OpenAI translation path) ---
             if (finishReason === 'stop') {
                 const { extractAndSaveMemories } = require('../utils/auto-memory');
-                extractAndSaveMemories(aReq.messages, data, cfg, upstreamModel, clientId).catch(() => {});
+                extractAndSaveMemories(aReq.messages, data, cfg, upstreamModel, clientId).catch(e => console.warn('[Auto-Memory] Extraction failed:', e.message));
             }
 
             res.writeHead(200, { 'Content-Type': 'application/json' });

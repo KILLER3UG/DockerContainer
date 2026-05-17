@@ -159,6 +159,47 @@ function normalizeManagedWebArgs(toolName, args = {}) {
   return normalized;
 }
 
+// ── Managed web tool names ──
+const MANAGED_WEB_TOOLS = new Set(['web_search', 'web_fetch']);
+
+function isManagedWebToolName(name) {
+  return MANAGED_WEB_TOOLS.has(name);
+}
+
+function getManagedWebToolDefinitions() {
+  return [
+    {
+      type: 'function',
+      function: {
+        name: 'web_search',
+        description: 'Search the public web using DuckDuckGo. Returns titles, URLs, and snippets.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'The search query.' },
+            max_results: { type: 'number', description: 'Max results to return (default 5, max 10).' }
+          },
+          required: ['query']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'web_fetch',
+        description: 'Fetch and extract readable text content from a public URL.',
+        parameters: {
+          type: 'object',
+          properties: {
+            url: { type: 'string', description: 'The URL to fetch.' }
+          },
+          required: ['url']
+        }
+      }
+    }
+  ];
+}
+
 // ── Main export ──
 async function executeManagedWebTool(toolName, args) {
   const normalizedArgs = normalizeManagedWebArgs(toolName, args);
@@ -169,4 +210,4 @@ async function executeManagedWebTool(toolName, args) {
   }
 }
 
-module.exports = { executeManagedWebTool };
+module.exports = { executeManagedWebTool, isManagedWebToolName, getManagedWebToolDefinitions };
