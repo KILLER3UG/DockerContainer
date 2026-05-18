@@ -1,5 +1,5 @@
 # Safely add claudish-proxy to your user PATH so you can run
-# claude-local, codex-local, and launch from any directory.
+# claude-local, codex-local, august-local, and launch from any directory.
 
 $dir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $currentPath = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -19,4 +19,5 @@ Write-Host "[install-global] Added to user PATH: $normalizedDir" -ForegroundColo
 Write-Host "[install-global] Close and reopen your terminal, then run:" -ForegroundColor Yellow
 Write-Host "               claude-local"
 Write-Host "               codex-local"
+Write-Host "               august-local"
 Write-Host "               launch"

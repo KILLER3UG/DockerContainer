@@ -16,7 +16,12 @@ let inspectorData = [];
 let thinkingData = [];
 let expandedReqId = null;
 let expandedThinkingReqId = null;
-let activeSection = localStorage.getItem('claudish-active-section') || 'overview';
+function getInitialDashboardSection() {
+    const hash = (window.location.hash || '').replace(/^#/, '').toLowerCase();
+    if (hash === 'august' || hash === 'august-console') return 'august';
+    return localStorage.getItem('claudish-active-section') || 'overview';
+}
+let activeSection = getInitialDashboardSection();
 let currentConfigState = {};
 let latestStatsSnapshot = null;
 let lastActivityRenderKey = '';
@@ -144,13 +149,16 @@ function switchSection(section) {
     if (sectionVisible('overview', 'traffic')) loadRequests();
     if (sectionVisible('overview')) loadActivity();
     if (sectionVisible('health')) loadHealthUI();
-    if (sectionVisible('workbench')) { ensureWorkbenchSession(); loadComputerUseStatus(); }
+    if (sectionVisible('workbench')) { ensureWorkbenchSession(); loadWorkbenchAgentsUI(); loadComputerUseStatus(); }
     if (sectionVisible('inspector')) loadInspector();
     if (sectionVisible('thinking')) loadThinking();
     if (sectionVisible('conversations')) loadConversations();
     if (sectionVisible('memory')) loadMemoryItemsUI();
     if (sectionVisible('mcp')) loadMcpSkillsUI();
-    if (sectionVisible('august')) loadAugustUI();
+    if (sectionVisible('august')) {
+        loadAugustUI();
+        if (typeof initAugustConsoleUI === 'function') initAugustConsoleUI();
+    }
 }
 
 /* ── UI Utilities ── */

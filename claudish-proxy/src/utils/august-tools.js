@@ -75,8 +75,8 @@ async function executeSubAgentTool(name, args) {
     }
     try {
         if (isWebToolName(name)) {
-            const { executeManagedWebTool } = require('./local-web');
-            return await executeManagedWebTool(name, args);
+            const { executeManagedWebTool, normalizeManagedWebToolName } = require('./local-web');
+            return await executeManagedWebTool(normalizeManagedWebToolName(name), args);
         }
     } catch (e) { /* web tools not available */ }
     try {
@@ -426,6 +426,55 @@ const AUGUST_TOOLS = [
     {
         type: 'function',
         function: {
+            name: 'august__find_skill_sources',
+            description: 'Find importable skills/capabilities from GitHub or preview a direct GitHub/raw/http URL. Use this when the user asks to fetch a new skill from the internet. This is read-only.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    query: { type: 'string', description: 'Skill topic, capability name, or direct public URL.' },
+                    url: { type: 'string', description: 'Direct GitHub/raw/http URL to resolve instead of searching.' },
+                    limit: { type: 'number', description: 'Maximum GitHub candidates. Defaults to 5.' },
+                    verify: { type: 'boolean', description: 'When true, preview the first one or two candidates. Defaults to false.' },
+                    enable_mcp: { type: 'boolean', description: 'Preview imported MCP servers as enabled. Defaults to false.' }
+                }
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'august__preview_skill_import',
+            description: 'Preview what a GitHub/raw/http capability link would save as skills, MCP servers, and plugins. This does not write anything.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    url: { type: 'string', description: 'GitHub repo/blob, raw URL, plugin manifest, MCP config, package metadata, pyproject.toml, or SKILL.md URL.' },
+                    enable_mcp: { type: 'boolean', description: 'Preview imported MCP servers as enabled. Defaults to false.' }
+                },
+                required: ['url']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'august__import_skill',
+            description: 'Import and save a skill/capability from a GitHub/raw/http link into the global August skill catalog. Requires explicit user confirmation. Saved skills become available to Claude Code, Hermes, Workbench, Codex, and other proxy clients on the next request.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    url: { type: 'string', description: 'GitHub repo/blob, raw URL, plugin manifest, MCP config, package metadata, pyproject.toml, or SKILL.md URL.' },
+                    enable_mcp: { type: 'boolean', description: 'Enable imported MCP servers immediately. Defaults to false for safety.' },
+                    restart_mcp: { type: 'boolean', description: 'Restart MCP servers after enabling imported MCP servers. Defaults to true.' },
+                    confirmed: { type: 'boolean', description: 'Must be true after explicit user approval/confirmation.' }
+                },
+                required: ['url']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
             name: 'august__load_skill',
             description: 'Loads the full instructions for a named skill from the skill catalog. Use this when a task description in the catalog matches what you need to do. Returns the complete skill content including trigger conditions and step-by-step guidance.',
             parameters: {
@@ -554,14 +603,24 @@ async function executeAugustToolCall(toolName, args) {
             case 'august__search_past_conversations': {
                 const { getProfile } = require('./config');
                 const cfg = getProfile('claude'); // Fallback to claude profile for embeddings
+                const { searchCheckpoints, searchCheckpointsByText } = require('./vector-db');
+                const localFallback = (reason) => {
+                    const fallbackResults = searchCheckpointsByText(args.query, 5);
+                    if (fallbackResults.length === 0) {
+                        return `No past conversations found matching the query. Local fallback was used because ${reason}.`;
+                    }
+                    return `[Infinite Memory Database Results - local fallback: ${reason}]\n\n` + fallbackResults.map(r =>
+                        `Date: ${r.timestamp}\nTopic: ${r.topic}\nSummary: ${r.summary}\nRelevance: ${(r.score * 100).toFixed(1)}%\nEmbedding: ${r.embeddingSource || 'unknown'}`
+                    ).join('\n\n---\n\n');
+                };
                 
                 let embeddingsUrl = cfg.targetUrl;
-                if (embeddingsUrl.includes('/anthropic')) {
+                if (embeddingsUrl && embeddingsUrl.includes('/anthropic')) {
                     embeddingsUrl = embeddingsUrl.replace('/anthropic/v1/messages', '/v1/embeddings').replace('/anthropic', '/v1/embeddings');
-                } else if (embeddingsUrl.includes('/v1/')) {
+                } else if (embeddingsUrl && embeddingsUrl.includes('/v1/')) {
                     embeddingsUrl = embeddingsUrl.substring(0, embeddingsUrl.indexOf('/v1/') + 4) + 'embeddings';
                 } else {
-                    return `Error: Could not determine embeddings API endpoint from proxy configuration.`;
+                    return localFallback('the proxy could not determine an embeddings endpoint');
                 }
 
                 const embedHeaders = { 'Content-Type': 'application/json' };
@@ -569,38 +628,42 @@ async function executeAugustToolCall(toolName, args) {
                     embedHeaders['Authorization'] = `Bearer ${cfg.apiKey}`;
                     embedHeaders['x-api-key'] = cfg.apiKey;
                 }
-                const embedModel = cfg.embeddingModel || (embeddingsUrl.includes('minimax') ? 'embo-01' : 'text-embedding-3-small');
+                const isMiniMaxEmbed = embeddingsUrl.includes('minimax');
+                const embedModel = cfg.embeddingModel || (isMiniMaxEmbed ? 'embo-01' : 'text-embedding-3-small');
+                const embedPayload = isMiniMaxEmbed
+                    ? { model: embedModel, texts: [args.query], type: 'query' }
+                    : { model: embedModel, input: args.query };
 
                 const embedResponse = await fetch(embeddingsUrl, {
                     method: 'POST',
                     headers: embedHeaders,
-                    body: JSON.stringify({
-                        model: embedModel,
-                        input: args.query
-                    }),
+                    body: JSON.stringify(embedPayload),
                     signal: AbortSignal.timeout(10000)
                 });
 
                 if (!embedResponse.ok) {
-                    return `Error: Failed to generate query embedding. Upstream returned ${embedResponse.status}.`;
+                    return localFallback(`the embedding API returned HTTP ${embedResponse.status}`);
                 }
 
                 const embedData = await embedResponse.json();
-                const vector = embedData.data?.[0]?.embedding;
-                
-                if (!vector || !Array.isArray(vector)) {
-                    return `Error: Invalid embedding returned from upstream.`;
+                if (embedData.base_resp && Number(embedData.base_resp.status_code || 0) !== 0) {
+                    return localFallback(embedData.base_resp.status_msg || `provider status ${embedData.base_resp.status_code}`);
                 }
 
-                const { searchCheckpoints } = require('./vector-db');
+                const vector = isMiniMaxEmbed ? embedData.vectors?.[0] : embedData.data?.[0]?.embedding;
+                
+                if (!vector || !Array.isArray(vector)) {
+                    return localFallback('the embedding provider returned no vector');
+                }
+
                 const results = searchCheckpoints(vector, 3);
                 
                 if (results.length === 0) {
-                    return `No past conversations found matching the query.`;
+                    return localFallback('semantic embedding search returned no matches');
                 }
 
                 return `[Infinite Memory Database Results]\n\n` + results.map(r => 
-                    `Date: ${r.timestamp}\nTopic: ${r.topic}\nSummary: ${r.summary}\nRelevance: ${(r.score * 100).toFixed(1)}%`
+                    `Date: ${r.timestamp}\nTopic: ${r.topic}\nSummary: ${r.summary}\nRelevance: ${(r.score * 100).toFixed(1)}%\nEmbedding: ${r.embeddingSource || 'unknown'}`
                 ).join('\n\n---\n\n');
             }
 
@@ -704,58 +767,42 @@ async function executeAugustToolCall(toolName, args) {
                 return `[Specialist: ${args.specialty}]\n${specReply}`;
 
             case 'august__supermemory': {
-                const { getConfig: getCfg2 } = require('./config');
-                const superCfg = getCfg2();
-                const apiKey = superCfg.supermemoryApiKey || process.env.SUPERMEMORY_API_KEY;
-                if (!apiKey) return `Supermemory is not configured. Set SUPERMEMORY_API_KEY in .env or config.`;
-
-                const superUrl = superCfg.supermemoryUrl || 'https://supermemory.ai/api';
-                const supHeaders = {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${apiKey}`
-                };
+                const {
+                    getSupermemorySettings,
+                    listSupermemoryDocuments,
+                    searchSupermemory,
+                    storeSupermemoryDocument,
+                    summarizeSupermemoryResult
+                } = require('./supermemory');
+                const settings = getSupermemorySettings();
+                if (!settings.configured) {
+                    return `Supermemory is not configured. Set SUPERMEMORY_API_KEY in .env or save a Supermemory API key in config.`;
+                }
 
                 switch (args.action) {
                     case 'store': {
                         if (!args.content) return 'Content is required for store action.';
-                        const storeRes = await fetch(`${superUrl}/documents`, {
-                            method: 'POST',
-                            headers: supHeaders,
-                            body: JSON.stringify({
-                                content: args.content,
-                                type: args.type || 'note'
-                            }),
-                            signal: AbortSignal.timeout(15000)
+                        const storeData = await storeSupermemoryDocument({
+                            content: args.content,
+                            type: args.type || 'note'
                         });
-                        if (!storeRes.ok) return `Supermemory store failed: HTTP ${storeRes.status}`;
-                        const storeData = await storeRes.json();
                         return `Stored in Supermemory. ID: ${storeData.id || storeData.documentId || 'ok'}`;
                     }
                     case 'search': {
                         if (!args.query) return 'Query is required for search action.';
-                        const searchRes = await fetch(`${superUrl}/search?q=${encodeURIComponent(args.query)}`, {
-                            headers: supHeaders,
-                            signal: AbortSignal.timeout(15000)
-                        });
-                        if (!searchRes.ok) return `Supermemory search failed: HTTP ${searchRes.status}`;
-                        const searchData = await searchRes.json();
+                        const searchData = await searchSupermemory({ query: args.query, limit: 5 });
                         const results = searchData.results || searchData.data || [];
                         if (results.length === 0) return 'No results from Supermemory.';
                         return '[Supermemory Results]\n' + results.slice(0, 5).map((r, i) =>
-                            `[${i + 1}] ${r.title || r.content?.slice(0, 100) || '(untitled)'}`
+                            `[${i + 1}] ${summarizeSupermemoryResult(r).slice(0, 180)}`
                         ).join('\n');
                     }
                     case 'list': {
-                        const listRes = await fetch(`${superUrl}/documents`, {
-                            headers: supHeaders,
-                            signal: AbortSignal.timeout(15000)
-                        });
-                        if (!listRes.ok) return `Supermemory list failed: HTTP ${listRes.status}`;
-                        const listData = await listRes.json();
-                        const docs = listData.documents || listData.data || [];
+                        const listData = await listSupermemoryDocuments({ limit: 10 });
+                        const docs = listData.memories || listData.documents || listData.data || [];
                         if (docs.length === 0) return 'No documents in Supermemory.';
                         return '[Supermemory Documents]\n' + docs.slice(0, 10).map((d, i) =>
-                            `[${i + 1}] ${d.title || d.content?.slice(0, 80) || '(untitled)'} (ID: ${d.id})`
+                            `[${i + 1}] ${d.title || d.summary || d.content?.slice(0, 80) || '(untitled)'} (ID: ${d.id})`
                         ).join('\n');
                     }
                     default:
@@ -1045,6 +1092,42 @@ async function executeAugustToolCall(toolName, args) {
                 reportLines.push(`\nAugust can call august__learn_subagent again anytime to scan for newer patterns.`);
 
                 return reportLines.join('\n');
+            }
+
+            case 'august__find_skill_sources': {
+                const { findSkillSources } = require('./skill-importer');
+                return findSkillSources({
+                    query: args.query,
+                    url: args.url,
+                    limit: args.limit,
+                    verify: args.verify === true,
+                    enableMcp: args.enable_mcp === true
+                });
+            }
+
+            case 'august__preview_skill_import': {
+                const { previewSkillImport } = require('./skill-importer');
+                return previewSkillImport({
+                    url: args.url,
+                    enableMcp: args.enable_mcp === true
+                });
+            }
+
+            case 'august__import_skill': {
+                if (!args.confirmed) {
+                    return `[August Confirmation Required]\n` +
+                           `The AI wants to import and save a proxy skill/capability from:\n\n` +
+                           `  ${args.url || '(missing url)'}\n\n` +
+                           `This can add local skills, plugins, and MCP server config that will be visible to all clients connected through this proxy.\n` +
+                           `To approve, call this tool again with the same URL and confirmed=true.\n` +
+                           `To cancel, tell me to stop.`;
+                }
+                const { importSkillFromLink } = require('./skill-importer');
+                return importSkillFromLink({
+                    url: args.url,
+                    enableMcp: args.enable_mcp === true,
+                    restartMcp: args.restart_mcp !== false
+                });
             }
 
             case 'august__load_skill': {

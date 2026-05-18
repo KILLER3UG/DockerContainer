@@ -17,12 +17,22 @@ const { identifyClient } = require('./utils/client-identity');
 const { executeManagedWebTool } = require('./utils/local-web');
 const { createHostFilesFolder, getCompatibilityStatus } = require('./utils/compatibility');
 const { importCapabilityLink } = require('./utils/link-importer');
+const { importSkillFromLink } = require('./utils/skill-importer');
 const { getCapabilityHealth } = require('./utils/health');
+const { getBrainDiagnostics } = require('./utils/brain-diagnostics');
 const { listMemoryItems, searchMemory, updateMemoryItem } = require('./utils/memory-lifecycle');
-const { approveWorkbenchPlan, createWorkbenchSession, resetWorkbenchSession, sendWorkbenchMessageStream } = require('./utils/workbench');
+const { answerWorkbenchBtw, approveWorkbenchPlan, createWorkbenchSession, getWorkbenchGoalStatus, listAgentRegistry, listProxyCapabilities, resetWorkbenchSession, sendWorkbenchMessageStream, updateWorkbenchGoal } = require('./utils/workbench');
+const sqliteMemoryStore = require('./utils/sqlite-memory-store');
+const memoryProviders = require('./utils/memory-providers');
+const agentRegistry = require('./utils/agent-registry');
+const agentSessions = require('./utils/agent-sessions');
+const terminalService = require('./utils/terminal-service');
+const automationJobs = require('./utils/automation-jobs');
+const memoryGovernance = require('./utils/memory-governance');
 const hostAgent = require('./utils/host-agent');
 
 const UI_PATH = path.join(__dirname, 'ui.html');
+const APP_PATH = path.join(__dirname, 'app.html');
 const TAILWIND_CSS_PATH = path.join(__dirname, 'tailwind.generated.css');
 const LISTEN_PORT = Number(process.env.CLAUDISH_PROXY_PORT || process.env.PORT || 8080);
 const MAX_CONTEXT_MAX_CHARS = 64000;
@@ -168,6 +178,11 @@ const server = http.createServer(async (req, res) => {
         return res.end(fs.readFileSync(UI_PATH, 'utf8'));
     }
 
+    if (req.url === '/app' && req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end(fs.readFileSync(APP_PATH, 'utf8'));
+    }
+
     if (req.url === '/favicon.ico' && req.method === 'GET') {
         res.writeHead(204);
         return res.end();
@@ -216,9 +231,43 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, getCapabilityHealth());
     }
 
+    if (req.url === '/ui/brain/diagnostics' && req.method === 'GET') {
+        return sendJson(res, getBrainDiagnostics());
+    }
+
     if (req.url === '/ui/workbench/session' && req.method === 'POST') {
         try {
             return sendJson(res, createWorkbenchSession(await readJsonBody(req)));
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url === '/ui/workbench/capabilities' && req.method === 'GET') {
+        return sendJson(res, listProxyCapabilities());
+    }
+
+    if (req.url.startsWith('/ui/workbench/agents') && req.method === 'GET') {
+        const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+        return sendJson(res, listAgentRegistry(url.searchParams.get('active') || 'build'));
+    }
+
+    if (req.url.startsWith('/ui/workbench/goal') && req.method === 'GET') {
+        const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+        return sendJson(res, getWorkbenchGoalStatus(url.searchParams.get('sessionId')));
+    }
+
+    if (req.url === '/ui/workbench/goal' && req.method === 'POST') {
+        try {
+            return sendJson(res, updateWorkbenchGoal(await readJsonBody(req)));
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url === '/ui/workbench/btw' && req.method === 'POST') {
+        try {
+            return sendJson(res, await answerWorkbenchBtw(await readJsonBody(req)));
         } catch (e) {
             return sendError(res, e, 400);
         }
@@ -259,7 +308,7 @@ const server = http.createServer(async (req, res) => {
     if (req.url === '/ui/workbench/reset' && req.method === 'POST') {
         try {
             const data = await readJsonBody(req);
-            return sendJson(res, resetWorkbenchSession(data.sessionId, data.provider));
+            return sendJson(res, resetWorkbenchSession(data.sessionId, data.provider, data.agentId));
         } catch (e) {
             return sendError(res, e, 400);
         }
@@ -322,14 +371,12 @@ const server = http.createServer(async (req, res) => {
     if (req.url === '/ui/import-link' && req.method === 'POST') {
         try {
             const data = await readJsonBody(req);
-            const imported = await importCapabilityLink({
+            const imported = await importSkillFromLink({
                 url: data.url,
-                enableMcp: data.enableMcp === true
+                enableMcp: data.enableMcp === true,
+                restartMcp: true
             });
-            let status = getMcpServerStatus();
-            if (imported.enabledMcpServers.length > 0) {
-                status = await restartMcpServers(getProfile('claude')?.apiKey || '');
-            }
+            const status = imported.mcpStatus || getMcpServerStatus();
             return sendJson(res, { imported, status, plugins: getPlugins() });
         } catch (e) {
             return sendError(res, e, 400);
@@ -425,14 +472,223 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, searchMemory(url.searchParams.get('q') || ''));
     }
 
+    if (req.url === '/ui/memory/store/status' && req.method === 'GET') {
+        return sendJson(res, sqliteMemoryStore.getMemoryStoreStatus());
+    }
+
+    if (req.url === '/ui/memory/store/rebuild' && req.method === 'POST') {
+        try {
+            const { readVectorEntries, syncSqliteMemoryStore } = require('./utils/vector-db');
+            const result = syncSqliteMemoryStore();
+            return sendJson(res, { ...result, vectorEntries: readVectorEntries().length, status: sqliteMemoryStore.getMemoryStoreStatus() });
+        } catch (e) {
+            return sendError(res, e, 500);
+        }
+    }
+
+    if (req.url.startsWith('/ui/memory/providers') && req.method === 'GET') {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const query = url.searchParams.get('q') || '';
+        return sendJson(res, {
+            providers: memoryProviders.listMemoryProviders(),
+            recalled: query ? memoryProviders.prefetchAll(query) : []
+        });
+    }
+
+    if (req.url.startsWith('/ui/memory/provider-events') && req.method === 'GET') {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        return sendJson(res, {
+            events: sqliteMemoryStore.listProviderEvents({ limit: url.searchParams.get('limit') || 25 })
+        });
+    }
+
+    if (req.url.startsWith('/ui/memory/governance') && req.method === 'GET') {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        return sendJson(res, memoryGovernance.searchGovernanceTargets(url.searchParams.get('q') || ''));
+    }
+
+    if (req.url === '/ui/memory/governance' && req.method === 'POST') {
+        try {
+            return sendJson(res, memoryGovernance.applyMemoryGovernance(await readJsonBody(req)));
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
     if (req.url === '/ui/memory/vector' && req.method === 'GET') {
         const { readVectorEntries } = require('./utils/vector-db');
         const entries = readVectorEntries().map(e => ({
+            id: e.id,
             topic: e.topic,
             summary: e.summary,
-            timestamp: e.timestamp
+            timestamp: e.timestamp,
+            metadata: e.metadata,
+            tags: e.tags
         }));
         return sendJson(res, { entries, count: entries.length });
+    }
+
+    if (req.url === '/ui/agents' && req.method === 'GET') {
+        return sendJson(res, { agents: agentRegistry.getAgents() });
+    }
+
+    if (req.url === '/ui/agents' && req.method === 'POST') {
+        try {
+            return sendJson(res, { agent: agentRegistry.saveAgent(await readJsonBody(req)), agents: agentRegistry.getAgents() });
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url === '/ui/agents/permissions' && req.method === 'POST') {
+        try {
+            const body = await readJsonBody(req);
+            return sendJson(res, {
+                permissions: agentRegistry.deriveChildAgentPermissions(body.parentAgent || 'build', body.childAgent || 'general')
+            });
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url === '/ui/agent-sessions' && req.method === 'GET') {
+        return sendJson(res, agentSessions.listAgentSessions());
+    }
+
+    if (req.url === '/ui/agent-sessions' && req.method === 'POST') {
+        try {
+            return sendJson(res, { session: agentSessions.createAgentSession(await readJsonBody(req)), ...agentSessions.listAgentSessions() });
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url.startsWith('/ui/agent-sessions/') && !req.url.startsWith('/ui/agent-sessions/.') ) {
+        try {
+            const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+            const parts = url.pathname.split('/').map(part => decodeURIComponent(part));
+            const sessionId = parts[3];
+            const action = parts[4] || '';
+            const requestId = parts[5] || '';
+            if (!sessionId) throw new Error('Agent session id is required');
+            if (!action && req.method === 'GET') {
+                return sendJson(res, agentSessions.getAgentSession(sessionId));
+            }
+            if (!action && req.method === 'PATCH') {
+                return sendJson(res, { session: agentSessions.updateAgentSession(sessionId, await readJsonBody(req)) });
+            }
+            if (!action && req.method === 'DELETE') {
+                return sendJson(res, agentSessions.deleteAgentSession(sessionId, { includeChildren: url.searchParams.get('includeChildren') === 'true' }));
+            }
+            if (action === 'todos' && req.method === 'POST') {
+                const body = await readJsonBody(req);
+                return sendJson(res, agentSessions.writeTodos(sessionId, body.todos || [], { merge: body.merge === true }));
+            }
+            if (action === 'permissions' && !requestId && req.method === 'POST') {
+                return sendJson(res, agentSessions.addPermissionRequest(sessionId, await readJsonBody(req)));
+            }
+            if (action === 'permissions' && requestId && req.method === 'POST') {
+                const body = await readJsonBody(req);
+                return sendJson(res, agentSessions.respondPermission(sessionId, requestId, body.response || (body.approve === false ? 'reject' : 'once')));
+            }
+            if (action === 'questions' && !requestId && req.method === 'POST') {
+                return sendJson(res, agentSessions.addQuestionRequest(sessionId, await readJsonBody(req)));
+            }
+            if (action === 'questions' && requestId && req.method === 'POST') {
+                const body = await readJsonBody(req);
+                return sendJson(res, agentSessions.respondQuestion(sessionId, requestId, body.answer));
+            }
+            if (action === 'tree-request' && req.method === 'GET') {
+                return sendJson(res, { request: agentSessions.findTreeRequest(sessionId, url.searchParams.get('type') || 'permission') });
+            }
+            if (action === 'run' && req.method === 'POST') {
+                return sendJson(res, await agentSessions.startSessionRun(sessionId, await readJsonBody(req)));
+            }
+            if (action === 'cancel' && req.method === 'POST') {
+                const body = await readJsonBody(req);
+                return sendJson(res, { session: agentSessions.cancelAgentSession(sessionId, body.reason || 'cancelled from dashboard') });
+            }
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url === '/ui/terminal/sessions' && req.method === 'GET') {
+        return sendJson(res, { sessions: terminalService.listTerminalSessions(), approvals: terminalService.listTerminalApprovals() });
+    }
+
+    if (req.url === '/ui/terminal/sessions' && req.method === 'POST') {
+        try {
+            return sendJson(res, terminalService.createTerminalSession(await readJsonBody(req)));
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url.startsWith('/ui/terminal/buffer') && req.method === 'GET') {
+        try {
+            const url = new URL(req.url, `http://${req.headers.host}`);
+            return sendJson(res, terminalService.readTerminalBuffer(url.searchParams.get('id')));
+        } catch (e) {
+            return sendError(res, e, 404);
+        }
+    }
+
+    if (req.url === '/ui/terminal/input' && req.method === 'POST') {
+        try {
+            const body = await readJsonBody(req);
+            return sendJson(res, terminalService.writeTerminalInput(body.id, body.input, { approved: body.approved }));
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url === '/ui/terminal/command' && req.method === 'POST') {
+        try {
+            return sendJson(res, await terminalService.submitTerminalCommand(await readJsonBody(req)));
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url === '/ui/terminal/approve' && req.method === 'POST') {
+        try {
+            const body = await readJsonBody(req);
+            return sendJson(res, await terminalService.approveTerminalRequest(body.requestId, { approve: body.approve !== false }));
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url.startsWith('/ui/terminal/sessions/') && req.method === 'DELETE') {
+        const id = decodeURIComponent(req.url.split('/').pop());
+        return sendJson(res, { deleted: terminalService.closeTerminalSession(id) });
+    }
+
+    if (req.url === '/ui/automations' && req.method === 'GET') {
+        return sendJson(res, automationJobs.listAutomationJobs());
+    }
+
+    if (req.url === '/ui/automations' && req.method === 'POST') {
+        try {
+            return sendJson(res, { job: automationJobs.saveAutomationJob(await readJsonBody(req)), ...automationJobs.listAutomationJobs() });
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url === '/ui/automations/run' && req.method === 'POST') {
+        try {
+            const body = await readJsonBody(req);
+            return sendJson(res, await automationJobs.runAutomationJob(body.id, { approved: body.approved }));
+        } catch (e) {
+            return sendError(res, e, 400);
+        }
+    }
+
+    if (req.url.startsWith('/ui/automations/') && req.method === 'DELETE') {
+        const id = decodeURIComponent(req.url.split('/').pop());
+        return sendJson(res, { deleted: automationJobs.deleteAutomationJob(id) });
     }
 
     // ── Real-time SSE stream ──
@@ -668,6 +924,41 @@ const server = http.createServer(async (req, res) => {
     if (req.url === '/ui/semantic-memory' && req.method === 'GET') {
         const { getAllFacts, factCount } = require('./utils/semantic-memory');
         return sendJson(res, { facts: getAllFacts(), count: factCount() });
+    }
+
+    if (req.url === '/ui/supermemory/test' && req.method === 'POST') {
+        try {
+            const { getSupermemorySettings, searchSupermemory, summarizeSupermemoryResult } = require('./utils/supermemory');
+            const body = await readJsonBody(req);
+            const query = String(body.query || '').trim();
+            if (!query) return sendError(res, new Error('query is required'), 400);
+            const settings = getSupermemorySettings();
+            if (!settings.configured) {
+                return sendJson(res, {
+                    configured: false,
+                    baseUrl: settings.baseUrl,
+                    results: [],
+                    error: 'Supermemory is not configured. Set SUPERMEMORY_API_KEY in .env or save a key in the August Brain tab.'
+                });
+            }
+            const data = await searchSupermemory({ query, limit: 5 });
+            const results = (data.results || data.data || []).slice(0, 5).map(item => ({
+                id: item.id,
+                text: summarizeSupermemoryResult(item),
+                similarity: item.similarity,
+                updatedAt: item.updatedAt,
+                metadata: item.metadata || null
+            }));
+            return sendJson(res, {
+                configured: true,
+                baseUrl: settings.baseUrl,
+                count: results.length,
+                results,
+                rawTotal: data.total
+            });
+        } catch (e) {
+            return sendError(res, e, 500);
+        }
     }
 
     if (req.url === '/ui/semantic-memory' && req.method === 'DELETE') {
@@ -985,6 +1276,18 @@ console.log(`--- AI Adapter Active on Port ${LISTEN_PORT} ---`);
 server.listen(LISTEN_PORT, '0.0.0.0', () => {
     console.log('[bridge] Server is listening...');
 });
+
+server.on('upgrade', (req, socket, head) => {
+    if (terminalService.handleTerminalUpgrade(req, socket, head)) return;
+    socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+    socket.destroy();
+});
+
+setInterval(() => {
+    automationJobs.runDueAutomations().catch(e => {
+        console.warn('[automations] tick failed:', e.message);
+    });
+}, 60000).unref();
 
 // Initialize MCP servers after the HTTP listener is available so the dashboard
 // remains reachable while uvx/npx tools warm their package caches.

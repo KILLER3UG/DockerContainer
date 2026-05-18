@@ -429,6 +429,9 @@ async function testAugustTools() {
             'august__list_facts',
             'august__call_specialist',
             'august__supermemory',
+            'august__find_skill_sources',
+            'august__preview_skill_import',
+            'august__import_skill',
         ];
 
         for (const name of expected) {

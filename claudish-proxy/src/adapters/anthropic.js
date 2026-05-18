@@ -170,9 +170,59 @@ const AUGUST_REMINDER = {
 const RULE_REMINDER_MESSAGE = {
     role: 'user',
     content: '[SYSTEM REMINDER] Continue the same reasoning chain across tool rounds. ' +
-             'Explore first, keep plan.md current before mutating changes, use PowerShell on Windows, ' +
+             'Explore first, present a plan and wait for explicit user approval before mutating changes, use PowerShell on Windows, ' +
              'and verify concrete results instead of guessing.'
 };
+
+const CLAUDE_CODE_NATIVE_TOOL_NAMES = new Set([
+    'Agent',
+    'Task',
+    'Bash',
+    'Read',
+    'Write',
+    'Edit',
+    'MultiEdit',
+    'NotebookEdit',
+    'Glob',
+    'Grep',
+    'LS',
+    'TodoWrite'
+]);
+
+const CLAUDE_CODE_NATIVE_GUARD = [
+    '[CLAUDE CODE / NATIVE SUBAGENT GUARD]',
+    'You are running through Claudish Proxy with Claude Code-style native tools.',
+    'Read-only exploration is allowed. TodoWrite/todo updates are internal task state and must not be described as project file updates.',
+    'Before using any native mutating tool or command that can change system state (Bash with non-read-only commands, Write, Edit, MultiEdit, NotebookEdit, file-changing MCP tools, skill/plugin/MCP imports, installs, deletes, moves, background processes), first present a concise implementation plan and wait for explicit user approval in chat.',
+    'If approval is missing, do not call the mutating tool. Stop and ask the user to approve the plan.',
+    'For subagent exploration tasks, report concrete evidence: files read, commands/tools used, key findings, and limits or uncertainty. Do not claim broad understanding unless the files actually read support it.',
+    'When the task is read-only, say explicitly that no project files were changed.'
+].join('\n');
+
+function getToolNames(tools) {
+    return (Array.isArray(tools) ? tools : [])
+        .map(tool => tool?.name || tool?.function?.name || '')
+        .filter(Boolean);
+}
+
+function hasClaudeCodeNativeTooling(tools) {
+    return getToolNames(tools).some(name => CLAUDE_CODE_NATIVE_TOOL_NAMES.has(name));
+}
+
+function buildClaudeCodeNativeGuidance(tools) {
+    return hasClaudeCodeNativeTooling(tools) ? CLAUDE_CODE_NATIVE_GUARD : '';
+}
+
+function appendTextToSystemBlocks(system, text) {
+    if (!text) return system;
+    const blocks = normalizeSystemBlocks(system);
+    const firstTextBlock = blocks.find(block => block?.type === 'text');
+    if (firstTextBlock) {
+        firstTextBlock.text = `${firstTextBlock.text || ''}\n\n---\n\n${text}`.trim();
+        return blocks;
+    }
+    return [{ type: 'text', text }, ...blocks];
+}
 
 function countToolResultTurns(messages) {
     if (!Array.isArray(messages)) return 0;
@@ -242,6 +292,26 @@ function formatManagedToolResult(toolName, result) {
     if (typeof result === 'string') return result;
     if (result === undefined || result === null) return '';
     return JSON.stringify(result);
+}
+
+async function executeManagedProxyTool(toolName, args) {
+    if (isManagedWebToolName(toolName)) {
+        const localName = getManagedWebLocalToolName(toolName);
+        logActivity('WEB', `${toolName} executed locally`);
+        return executeManagedWebTool(localName, args || {});
+    }
+    if (isCoworkToolName(toolName)) {
+        logActivity('COWORK', `${toolName} executed by proxy compatibility layer`);
+        return executeCoworkToolCall(toolName, args || {});
+    }
+    if (isAugustToolName(toolName)) {
+        logActivity('AUGUST', `${toolName} executed locally`);
+        return executeAugustToolCall(toolName, args || {});
+    }
+    if (isMcpToolName(toolName)) {
+        return executeMcpToolCall(toolName, args || {});
+    }
+    throw new Error(`Unsupported managed proxy tool: ${toolName}`);
 }
 
 function extractToolResultText(content) {
@@ -979,10 +1049,11 @@ function buildAnthropicUpstreamRequest(aReq, cfg, upstreamModelOverride, clientI
     if (aReq.tool_choice) upstreamReq.tool_choice = aReq.tool_choice;
     if (aReq.metadata) upstreamReq.metadata = aReq.metadata;
     if (aReq.stream !== undefined) upstreamReq.stream = aReq.stream;
-    const clientToolGuidance = buildClientToolGuidance(aReq.tools);
-    if (clientToolGuidance && Array.isArray(upstreamReq.system) && upstreamReq.system[0]?.type === 'text') {
-        upstreamReq.system[0].text += '\n\n---\n\n' + clientToolGuidance;
-    }
+    const extraSystemGuidance = [
+        buildClientToolGuidance(aReq.tools),
+        buildClaudeCodeNativeGuidance(aReq.tools)
+    ].filter(Boolean).join('\n\n---\n\n');
+    upstreamReq.system = appendTextToSystemBlocks(upstreamReq.system, extraSystemGuidance);
     return upstreamReq;
 }
 
@@ -1556,6 +1627,7 @@ async function handleMessages(req, res, cleanPath, reqId) {
                             sendSimulatedAnthropicStream(res, parsed, clientFacingModel);
 
                             if (parsed.stop_reason === 'end_turn') {
+                                console.log('[Auto-Memory] end_turn detected (3P desktop flow), launching extraction...');
                                 const { extractAndSaveMemories } = require('../utils/auto-memory');
                                 extractAndSaveMemories(aReq.messages, parsed, cfg, upstreamModel, clientId).catch(e => console.warn('[Auto-Memory] Extraction failed:', e.message));
                             }
@@ -1595,6 +1667,7 @@ async function handleMessages(req, res, cleanPath, reqId) {
                             
                             // --- AUTO-MEMORY BACKGROUND EXTRACTION ---
                             if (parsed.stop_reason === 'end_turn') {
+                                console.log('[Auto-Memory] end_turn detected, launching extraction...');
                                 const { extractAndSaveMemories } = require('../utils/auto-memory');
                                 extractAndSaveMemories(aReq.messages, parsed, cfg, upstreamModel, clientId).catch(e => console.warn('[Auto-Memory] Extraction failed:', e.message));
                             }
@@ -1603,6 +1676,7 @@ async function handleMessages(req, res, cleanPath, reqId) {
 
                         // --- AUTO-MEMORY BACKGROUND EXTRACTION (Non-stream tool resolution case) ---
                         if (parsed.stop_reason === 'end_turn') {
+                            console.log('[Auto-Memory] end_turn detected (non-stream path), launching extraction...');
                             const { extractAndSaveMemories } = require('../utils/auto-memory');
                             extractAndSaveMemories(aReq.messages, parsed, cfg, upstreamModel, clientId).catch(e => console.warn('[Auto-Memory] Extraction failed:', e.message));
                         }
@@ -1797,4 +1871,16 @@ async function handleCountTokens(req, res, cleanPath, reqId) {
     });
 }
 
-module.exports = { handleMessages, handleCountTokens, AUGUST_REMINDER, RULE_REMINDER_MESSAGE, shouldInjectReminderMessage, shouldInjectAugustReminder };
+module.exports = {
+    handleMessages,
+    handleCountTokens,
+    AUGUST_REMINDER,
+    RULE_REMINDER_MESSAGE,
+    CLAUDE_CODE_NATIVE_GUARD,
+    hasClaudeCodeNativeTooling,
+    buildClaudeCodeNativeGuidance,
+    appendTextToSystemBlocks,
+    executeManagedProxyTool,
+    shouldInjectReminderMessage,
+    shouldInjectAugustReminder
+};

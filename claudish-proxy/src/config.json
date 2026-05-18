@@ -62,7 +62,7 @@
       "timeoutMs": 60000
     }
   },
-  "supermemoryUrl": "https://supermemory.ai/api",
+  "supermemoryUrl": "https://api.supermemory.ai",
   "customProvider": {
     "baseUrl": "https://api.minimax.io/anthropic",
     "apiKey": "${env:MINIMAX_API_KEY}"
@@ -70,6 +70,7 @@
   "requestLogLimit": 1000000000,
   "pendingRequestTimeoutMinutes": 1000,
   "memoryContextMaxChars": 24000,
+  "memoryExtractionModel": "MiniMax-M2.7",
   "august_secret_key": "${env:GATEWAY_API_KEY}",
   "mcpServers": [
     {

@@ -3,6 +3,8 @@ const { renderSkillCatalog } = require('./skills');
 const { renderPluginCatalog } = require('./plugins');
 const { getDisplayName } = require('./client-identity');
 const semanticMemory = require('./semantic-memory');
+const { buildMemoryProviderContext } = require('./memory-providers');
+const { renderAgentContext } = require('./agent-registry');
 
 const MINIMAX_M2_7_CODING_CONTRACT = `You are an expert coding agent operating in Windows PowerShell.
 
@@ -57,6 +59,8 @@ Operational self-awareness:
 - If an MCP server is not running, first check whether a proxy compatibility tool with the same visible name exists. Use that compatible tool path before telling the user the capability is unavailable.
 - Keep the Claude-facing identity and tool names stable while using whatever upstream model is configured behind the proxy.
 - Preserve long-running task continuity. Do not restart from scratch after tool rounds; carry forward what was already inspected, changed, and verified.
+- Skills imported through August are saved in the proxy-global skill catalog and become available to every connected client on the next request, including Workbench, Claude Code, Hermes, and Codex.
+- To fetch new skills from GitHub or the internet, search/preview first with august__find_skill_sources or august__preview_skill_import. Importing a skill/plugin/MCP config is a mutation and requires explicit user approval or confirmation before calling august__import_skill.
 - Record durable project, integration, or workflow facts with August memory tools when they will help future desktop or phone sessions.`;
 
 const DEFAULT_CONTEXT_MAX_CHARS = 24000;
@@ -154,6 +158,12 @@ function prioritizeLines(lines, limit) {
         .slice(0, limit)
         .sort((a, b) => a.index - b.index)
         .map(item => item.line);
+}
+
+function newestFactFirst(a, b) {
+    const bTime = Date.parse(b?.updated || b?.created || 0) || 0;
+    const aTime = Date.parse(a?.updated || a?.created || 0) || 0;
+    return bTime - aTime;
 }
 
 function renderClaudeMemorySections(sections) {
@@ -392,9 +402,21 @@ function buildSystemPromptDetails(system, options = {}) {
     ));
 
     chunks.push(wrapTag(
+        'august_memory_providers',
+        buildMemoryProviderContext(options.memoryQuery || ''),
+        'source="memory-providers" lifecycle="prefetch sync_turn pre_compress memory_write"'
+    ));
+
+    chunks.push(wrapTag(
         'august_subagent_config',
         subagentConfigToContextBlock(),
         'source="august_subagent_config.json"'
+    ));
+
+    chunks.push(wrapTag(
+        'august_agent_registry',
+        renderAgentContext(),
+        'source="august_agents.json" permission_model="inherit_parent_denies"'
     ));
 
     const skillCatalog = renderSkillCatalog(skills);
@@ -407,7 +429,7 @@ function buildSystemPromptDetails(system, options = {}) {
         chunks.push(wrapTag('plugin_catalog', pluginCatalog, 'source="config.customPlugins"'));
     }
 
-    chunks.push(wrapTag('skill_loading', 'Skills are loaded on-demand. Review the catalog above. When a task matches a skill\'s description, call august__load_skill with the skill name to load its full instructions.'));
+    chunks.push(wrapTag('skill_loading', 'Skills are loaded on-demand. Review the catalog above. When a task matches a skill\'s description, call august__load_skill with the skill name to load its full instructions. If the user asks for a missing skill from GitHub or the internet, use august__find_skill_sources or august__preview_skill_import first, then get explicit approval before august__import_skill. Imported skills are shared through the proxy-global catalog for all connected clients on the next request.'));
 
     // ── Client identity injection ──
     const displayName = getDisplayName(clientId);
@@ -419,7 +441,7 @@ function buildSystemPromptDetails(system, options = {}) {
     }
 
     // ── Semantic memory facts injection (top 10 active) ──
-    const topFacts = semanticMemory.getAllFacts().slice(0, 10);
+    const topFacts = semanticMemory.getAllFacts().slice().sort(newestFactFirst).slice(0, 10);
     if (topFacts.length > 0) {
         const factsText = topFacts.map(f =>
             `- ${f.key}: ${f.value} [${f.category}]${f.source ? ` (from ${f.source})` : ''}`

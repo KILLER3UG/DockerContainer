@@ -77,12 +77,29 @@ async function webSearch(query, maxResults = 5) {
   // api.duckduckgo.com only returns Instant Answers (topic summaries) which are
   // almost always empty for general queries.
   const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-  const res = await httpsGet(url, 15000, {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Accept-Language': 'en-US,en;q=0.9'
-  });
+  let res;
+  try {
+    res = await httpsGet(url, 15000, {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept-Language': 'en-US,en;q=0.9'
+    });
+  } catch (e) {
+    return {
+      results: [],
+      query,
+      count: 0,
+      note: `Search provider unavailable: ${e.message}`
+    };
+  }
 
-  if (res.status !== 200) throw new Error(`DuckDuckGo returned status ${res.status}`);
+  if (res.status !== 200) {
+    return {
+      results: [],
+      query,
+      count: 0,
+      note: `Search provider returned status ${res.status}`
+    };
+  }
 
   const results = [];
   const html = res.body;
@@ -141,16 +158,23 @@ async function webFetch(url) {
   return { title, url, content: textContent, status: res.status };
 }
 
+function normalizeManagedWebToolName(toolName) {
+  if (toolName === 'WebSearch' || toolName === 'mcp__workspace__web_search') return 'web_search';
+  if (toolName === 'WebFetch' || toolName === 'mcp__workspace__web_fetch') return 'web_fetch';
+  return toolName;
+}
+
 function normalizeManagedWebArgs(toolName, args = {}) {
+  const localName = normalizeManagedWebToolName(toolName);
   const normalized = { ...(args || {}) };
 
-  if (toolName === 'web_fetch') {
+  if (localName === 'web_fetch') {
     if ((normalized.url === undefined || normalized.url === null || normalized.url === '') && typeof normalized.prompt === 'string') {
       normalized.url = normalized.prompt.trim();
     }
   }
 
-  if (toolName === 'web_search') {
+  if (localName === 'web_search') {
     if ((normalized.query === undefined || normalized.query === null || normalized.query === '') && typeof normalized.prompt === 'string') {
       normalized.query = normalized.prompt.trim();
     }
@@ -160,7 +184,14 @@ function normalizeManagedWebArgs(toolName, args = {}) {
 }
 
 // ── Managed web tool names ──
-const MANAGED_WEB_TOOLS = new Set(['web_search', 'web_fetch']);
+const MANAGED_WEB_TOOLS = new Set([
+  'web_search',
+  'web_fetch',
+  'WebSearch',
+  'WebFetch',
+  'mcp__workspace__web_search',
+  'mcp__workspace__web_fetch'
+]);
 
 function isManagedWebToolName(name) {
   return MANAGED_WEB_TOOLS.has(name);
@@ -196,18 +227,81 @@ function getManagedWebToolDefinitions() {
           required: ['url']
         }
       }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'WebSearch',
+        description: 'Search the public web using DuckDuckGo. Claude-compatible alias resolved locally by the proxy.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'The search query.' },
+            prompt: { type: 'string', description: 'Compatibility alias for query.' },
+            max_results: { type: 'number', description: 'Max results to return (default 5, max 10).' }
+          },
+          required: ['query']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'WebFetch',
+        description: 'Fetch and extract readable text from a public URL. Claude-compatible alias resolved locally by the proxy.',
+        parameters: {
+          type: 'object',
+          properties: {
+            url: { type: 'string', description: 'The URL to fetch.' },
+            prompt: { type: 'string', description: 'Compatibility alias for url.' }
+          },
+          required: ['url']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'mcp__workspace__web_search',
+        description: 'Workspace-compatible public web search alias resolved locally by the proxy.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'The search query.' },
+            prompt: { type: 'string', description: 'Compatibility alias for query.' },
+            max_results: { type: 'number', description: 'Max results to return (default 5, max 10).' }
+          },
+          required: ['query']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'mcp__workspace__web_fetch',
+        description: 'Workspace-compatible public page fetch alias resolved locally by the proxy.',
+        parameters: {
+          type: 'object',
+          properties: {
+            url: { type: 'string', description: 'The URL to fetch.' },
+            prompt: { type: 'string', description: 'Compatibility alias for url.' }
+          },
+          required: ['url']
+        }
+      }
     }
   ];
 }
 
 // ── Main export ──
 async function executeManagedWebTool(toolName, args) {
-  const normalizedArgs = normalizeManagedWebArgs(toolName, args);
-  switch (toolName) {
+  const localName = normalizeManagedWebToolName(toolName);
+  const normalizedArgs = normalizeManagedWebArgs(localName, args);
+  switch (localName) {
     case 'web_search': return webSearch(normalizedArgs.query || '', normalizedArgs.max_results || 5);
     case 'web_fetch':  return webFetch(normalizedArgs.url || '');
     default: throw new Error(`Unknown web tool: ${toolName}`);
   }
 }
 
-module.exports = { executeManagedWebTool, isManagedWebToolName, getManagedWebToolDefinitions };
+module.exports = { executeManagedWebTool, isManagedWebToolName, getManagedWebToolDefinitions, normalizeManagedWebToolName };

@@ -1,5 +1,8 @@
 /* ── Memory ── */
 
+        let augustAgentState = [];
+        let augustAgentSessionState = [];
+
         function escMemHtml(str) {
             if (!str) return '';
             return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -176,7 +179,25 @@
                     ? core.map(item => `<div class="rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900"><p class="font-semibold text-slate-800 dark:text-slate-100">${escapeHtml(item.title)}</p><p class="mt-1 leading-5">${escapeHtml(item.summary || '')}</p></div>`).join('')
                     : '<p class="text-slate-400 dark:text-slate-500">No core matches.</p>';
                 const vectorHtml = vector.length
-                    ? vector.map(item => `<div class="rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900"><p class="font-semibold text-slate-800 dark:text-slate-100">${escapeHtml(item.topic || 'Vector memory')}</p><p class="mt-1 leading-5">${escapeHtml(item.summary || '')}</p></div>`).join('')
+                    ? vector.map(item => {
+                        const retrieval = item.retrieval || {};
+                        const score = Number(item.score || 0);
+                        const meta = [
+                            retrieval.method || 'hybrid',
+                            retrieval.sqliteFtsRank ? `FTS #${retrieval.sqliteFtsRank}` : '',
+                            score ? `${Math.round(score * 100)}%` : ''
+                        ].filter(Boolean).join(' · ');
+                        return `<div class="rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900">
+                            <div class="flex items-start justify-between gap-3">
+                                <div>
+                                    <p class="font-semibold text-slate-800 dark:text-slate-100">${escapeHtml(item.topic || 'Vector memory')}</p>
+                                    <p class="mt-1 leading-5">${escapeHtml(item.summary || '')}</p>
+                                    <p class="mt-1 text-[10px] uppercase tracking-wide text-slate-400">${escapeHtml(meta)}</p>
+                                </div>
+                                ${item.id ? `<button onclick="applyMemoryGovernanceUI('forget_vector', '${escapeHtml(item.id)}')" class="minimal-button px-2 py-1 text-[10px]">Forget</button>` : ''}
+                            </div>
+                        </div>`;
+                    }).join('')
                     : '<p class="text-slate-400 dark:text-slate-500">No vector matches.</p>';
                 results.innerHTML = `
                     <div class="space-y-3">
@@ -396,6 +417,7 @@
                 pluginListState = Array.isArray(data.plugins) ? data.plugins : [];
                 renderPluginsUI();
                 await Promise.all([loadMcpUI(), loadSkillsUI(), loadMemoryPreview(), loadHealthUI()]);
+                if (typeof invalidateWorkbenchSlashCommands === 'function') invalidateWorkbenchSlashCommands();
                 showStatus('Proxy plugin refreshed from source', 'bg-emerald-600 text-white');
             } catch (e) {
                 showStatus(e.message, 'bg-red-600 text-white');
@@ -646,6 +668,7 @@ function loadMcpSkillsUI() {
                 if (!res.ok) throw new Error(data.error || 'Failed to save skill');
                 showStatus('Skill saved', 'bg-emerald-600 text-white');
                 await Promise.all([loadSkillsUI(), loadMemoryPreview(), loadHealthUI()]);
+                if (typeof invalidateWorkbenchSlashCommands === 'function') invalidateWorkbenchSlashCommands();
             } catch (e) {
                 showStatus(e.message, 'bg-red-600 text-white');
             }
@@ -659,6 +682,7 @@ function loadMcpSkillsUI() {
                 if (!res.ok) throw new Error(data.error || 'Failed to delete skill');
                 showStatus('Skill deleted', 'bg-slate-700 text-white');
                 await Promise.all([loadSkillsUI(), loadMemoryPreview(), loadHealthUI()]);
+                if (typeof invalidateWorkbenchSlashCommands === 'function') invalidateWorkbenchSlashCommands();
             } catch (e) {
                 showStatus(e.message, 'bg-red-600 text-white');
             }
@@ -849,6 +873,12 @@ function loadMcpSkillsUI() {
         }
 
         function loadAugustUI() {
+            loadMemoryProvidersUI();
+            loadAgentRegistryUI();
+            loadAgentSessionsUI();
+            loadAutomationJobsUI();
+            loadBrainDiagnosticsUI();
+            loadTerminalPanelUI();
             loadSemanticMemoryUI();
             loadSpecialistUI();
             loadUrlMcpUI();
@@ -858,6 +888,693 @@ function loadMcpSkillsUI() {
                     const urlEl = document.getElementById('supermemoryUrl');
                     if (urlEl && cfg.supermemoryUrl) urlEl.value = cfg.supermemoryUrl;
                 }).catch(() => {});
+            }
+        }
+
+/* ── August Provider Stack ── */
+        function permissionBadgeClass(value) {
+            if (value === 'allow') return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300';
+            if (value === 'deny') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300';
+            return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300';
+        }
+
+        function renderPermissionBadges(permissions) {
+            return Object.entries(permissions || {}).map(([key, value]) =>
+                renderTinyBadge(`${key}:${value}`, permissionBadgeClass(value))
+            ).join(' ');
+        }
+
+        async function loadMemoryProvidersUI() {
+            const list = document.getElementById('memoryProviderList');
+            const recall = document.getElementById('memoryProviderRecall');
+            const eventsEl = document.getElementById('memoryProviderEvents');
+            const status = document.getElementById('memoryProviderStatus');
+            if (!list && !recall && !eventsEl && !status) return;
+            const query = document.getElementById('providerRecallQuery')?.value?.trim() || 'august brain proxy';
+            try {
+                const [providersRes, storeRes, eventsRes] = await Promise.all([
+                    fetch('/ui/memory/providers?q=' + encodeURIComponent(query), { cache: 'no-store' }),
+                    fetch('/ui/memory/store/status', { cache: 'no-store' }),
+                    fetch('/ui/memory/provider-events?limit=12', { cache: 'no-store' })
+                ]);
+                const data = await providersRes.json();
+                const store = await storeRes.json();
+                const providerEvents = await eventsRes.json();
+                if (!providersRes.ok) throw new Error(data.error || 'Failed to load memory providers');
+                const providers = Array.isArray(data.providers) ? data.providers : [];
+                if (status) {
+                    status.textContent = `SQLite ${store.available ? 'available' : 'fallback'} via ${store.driver || 'unknown'} with ${formatExactNumber(store.count || 0)} mirrored rows.`;
+                }
+                if (list) {
+                    list.innerHTML = providers.map(provider => {
+                        const hooks = (provider.hooks || []).map(hook => renderTinyBadge(hook, 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400')).join(' ');
+                        const detail = provider.status
+                            ? `${provider.status.driver || 'unknown'} · ${formatExactNumber(provider.status.count || 0)} rows`
+                            : provider.type;
+                        return `
+                            <div class="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+                                <div class="flex items-start justify-between gap-3">
+                                    <div>
+                                        <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-100">${escapeHtml(provider.label || provider.id)}</h3>
+                                        <p class="mt-1 text-[11px] text-slate-400 dark:text-slate-500">${escapeHtml(detail || '')}</p>
+                                    </div>
+                                    ${renderTinyBadge(provider.enabled ? 'enabled' : 'disabled', provider.enabled ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400')}
+                                </div>
+                                <div class="mt-3 flex flex-wrap gap-1.5">${hooks}</div>
+                            </div>
+                        `;
+                    }).join('');
+                }
+                if (recall) {
+                    const recalled = Array.isArray(data.recalled) ? data.recalled : [];
+                    recall.innerHTML = recalled.length
+                        ? recalled.map(item => `
+                            <div class="mb-3 rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900">
+                                <div class="flex items-center gap-2">
+                                    ${renderTinyBadge(item.provider || 'provider', 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300')}
+                                    ${renderTinyBadge(item.type || 'memory', 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400')}
+                                </div>
+                                <p class="mt-2 font-semibold text-slate-800 dark:text-slate-100">${escapeHtml(item.title || 'Memory result')}</p>
+                                <p class="mt-1 leading-5">${escapeHtml(item.text || '')}</p>
+                            </div>
+                        `).join('')
+                        : '<div class="text-slate-400 dark:text-slate-500">No provider recall results for this query.</div>';
+                }
+                if (eventsEl) {
+                    const events = Array.isArray(providerEvents.events) ? providerEvents.events : [];
+                    eventsEl.innerHTML = events.length
+                        ? events.map(event => `
+                            <div class="mb-2 rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900">
+                                <div class="flex items-center justify-between gap-2">
+                                    <span class="font-semibold text-slate-700 dark:text-slate-200">${escapeHtml(event.providerId || 'provider')}.${escapeHtml(event.hook || 'hook')}</span>
+                                    <span class="text-[10px] text-slate-400">${event.createdAt ? new Date(event.createdAt).toLocaleTimeString() : ''}</span>
+                                </div>
+                                <p class="mt-1 truncate font-mono text-[10px] text-slate-400">${escapeHtml(event.sessionId || event.id || '')}</p>
+                            </div>
+                        `).join('')
+                        : '<div class="text-slate-400 dark:text-slate-500">No provider hook events yet.</div>';
+                }
+            } catch (e) {
+                if (list) list.innerHTML = `<div class="rounded-2xl border border-red-200 bg-red-50 p-4 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">${escapeHtml(e.message)}</div>`;
+            }
+        }
+
+        async function rebuildSqliteMemoryUI() {
+            const status = document.getElementById('memoryProviderStatus');
+            try {
+                if (status) status.textContent = 'Rebuilding SQLite mirror...';
+                const res = await fetch('/ui/memory/store/rebuild', { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'SQLite rebuild failed');
+                showStatus(`SQLite memory mirror rebuilt: ${data.synced || 0} rows`, 'bg-emerald-600 text-white');
+                await loadMemoryProvidersUI();
+            } catch (e) {
+                showStatus(e.message, 'bg-red-600 text-white');
+            }
+        }
+
+/* ── August Agents ── */
+        function fillAgentFormUI(encodedId) {
+            const id = decodeURIComponent(encodedId || '');
+            const agent = augustAgentState.find(item => item.id === id);
+            if (!agent) return;
+            document.getElementById('agentIdInput').value = agent.id || '';
+            document.getElementById('agentRoleInput').value = agent.role || '';
+            document.getElementById('agentGoalInput').value = agent.goal || '';
+            document.getElementById('agentModeInput').value = agent.mode || 'subagent';
+            document.getElementById('agentTemplateInput').value = agent.id || 'general';
+            document.getElementById('agentMemoryEnabledInput').checked = agent.memory_enabled !== false;
+            document.getElementById('agentDelegationInput').checked = agent.allow_delegation === true;
+        }
+
+        async function loadAgentRegistryUI() {
+            const list = document.getElementById('agentRegistryList');
+            if (!list) return;
+            try {
+                const res = await fetch('/ui/agents', { cache: 'no-store' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to load agents');
+                augustAgentState = Array.isArray(data.agents) ? data.agents : [];
+                list.innerHTML = augustAgentState.map(agent => `
+                    <div class="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+                        <div class="flex items-start justify-between gap-3">
+                            <div class="min-w-0">
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-100">${escapeHtml(agent.id)}</h3>
+                                    ${renderTinyBadge(agent.mode || 'agent', agent.mode === 'primary' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300' : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400')}
+                                </div>
+                                <p class="mt-1 text-xs font-semibold text-slate-600 dark:text-slate-300">${escapeHtml(agent.role || '')}</p>
+                                <p class="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">${escapeHtml(agent.goal || '')}</p>
+                            </div>
+                            <button onclick="fillAgentFormUI('${encodeURIComponent(agent.id)}')" class="minimal-button shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold">Edit</button>
+                        </div>
+                        <div class="mt-3 flex flex-wrap gap-1.5">${renderPermissionBadges(agent.permissions)}</div>
+                    </div>
+                `).join('');
+                await deriveAgentPermissionsUI();
+            } catch (e) {
+                list.innerHTML = `<div class="rounded-2xl border border-red-200 bg-red-50 p-4 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">${escapeHtml(e.message)}</div>`;
+            }
+        }
+
+        async function saveAgentRegistryUI() {
+            const id = document.getElementById('agentIdInput')?.value?.trim();
+            if (!id) {
+                showStatus('Agent id is required', 'bg-red-600 text-white');
+                return;
+            }
+            const templateId = document.getElementById('agentTemplateInput')?.value || 'general';
+            const template = augustAgentState.find(agent => agent.id === templateId) || augustAgentState.find(agent => agent.id === 'general') || {};
+            const payload = {
+                id,
+                role: document.getElementById('agentRoleInput')?.value?.trim() || id,
+                goal: document.getElementById('agentGoalInput')?.value?.trim() || 'Handle assigned August Brain work.',
+                mode: document.getElementById('agentModeInput')?.value || 'subagent',
+                memory_enabled: document.getElementById('agentMemoryEnabledInput')?.checked !== false,
+                allow_delegation: document.getElementById('agentDelegationInput')?.checked === true,
+                permissions: template.permissions || {},
+                tools: template.tools || []
+            };
+            try {
+                const res = await fetch('/ui/agents', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to save agent');
+                showStatus('Agent saved', 'bg-emerald-600 text-white');
+                await loadAgentRegistryUI();
+            } catch (e) {
+                showStatus(e.message, 'bg-red-600 text-white');
+            }
+        }
+
+        async function deriveAgentPermissionsUI(parentOverride, childOverride) {
+            const preview = document.getElementById('agentPermissionPreview');
+            if (!preview) return;
+            const parentAgent = parentOverride ? decodeURIComponent(parentOverride) : (document.getElementById('agentParentInput')?.value?.trim() || 'build');
+            const childAgent = childOverride ? decodeURIComponent(childOverride) : (document.getElementById('agentChildInput')?.value?.trim() || 'general');
+            try {
+                const res = await fetch('/ui/agents/permissions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ parentAgent, childAgent })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Permission check failed');
+                preview.textContent = JSON.stringify({ parentAgent, childAgent, permissions: data.permissions }, null, 2);
+            } catch (e) {
+                preview.textContent = e.message;
+            }
+        }
+
+/* ── August Agent Sessions ── */
+        function sessionStatusClass(status) {
+            if (status === 'running') return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300';
+            if (status === 'blocked') return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300';
+            if (status === 'completed') return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300';
+            if (status === 'failed' || status === 'cancelled') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300';
+            return 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400';
+        }
+
+        function pendingRequestCount(session) {
+            const permissions = Array.isArray(session.permissions) ? session.permissions : [];
+            const questions = Array.isArray(session.questions) ? session.questions : [];
+            return permissions.filter(item => item.status === 'pending').length + questions.filter(item => item.status === 'pending').length;
+        }
+
+        async function loadAgentSessionsUI() {
+            const list = document.getElementById('agentSessionList');
+            const summary = document.getElementById('agentSessionSummary');
+            if (!list && !summary) return;
+            try {
+                const res = await fetch('/ui/agent-sessions', { cache: 'no-store' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to load agent sessions');
+                augustAgentSessionState = Array.isArray(data.sessions) ? data.sessions : [];
+                if (summary) {
+                    const counts = data.counts || {};
+                    summary.textContent = `${formatExactNumber(counts.total || 0)} sessions · ${formatExactNumber(counts.running || 0)} running · ${formatExactNumber(counts.blocked || 0)} blocked.`;
+                }
+                if (!list) return;
+                list.innerHTML = augustAgentSessionState.length ? augustAgentSessionState.map(session => {
+                    const todos = session.todoSummary || {};
+                    const requests = pendingRequestCount(session);
+                    return `
+                        <div class="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+                            <div class="flex items-start justify-between gap-3">
+                                <div class="min-w-0">
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-100">${escapeHtml(session.title || session.id)}</h3>
+                                        ${renderTinyBadge(session.status || 'idle', sessionStatusClass(session.status))}
+                                        ${session.todoDock && session.todoDock !== 'hide' ? renderTinyBadge(`todos:${session.todoDock}`, 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300') : ''}
+                                    </div>
+                                    <p class="mt-1 truncate font-mono text-[10px] text-slate-400">${escapeHtml(session.id || '')}</p>
+                                    <p class="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">${escapeHtml(session.task || session.lastRun?.command || '')}</p>
+                                    <p class="mt-1 font-mono text-[10px] text-slate-400">agent: ${escapeHtml(session.agent || 'build')} · todos: ${formatExactNumber(todos.pending || 0)}/${formatExactNumber(todos.total || 0)} pending · requests: ${formatExactNumber(requests)}</p>
+                                </div>
+                            </div>
+                            <div class="mt-3 flex flex-wrap gap-2">
+                                <button onclick="inspectAgentSessionUI('${encodeURIComponent(session.id)}')" class="minimal-button rounded-lg px-3 py-1.5 text-xs">Inspect</button>
+                                <button onclick="copyAgentSessionRunIdUI('${encodeURIComponent(session.id)}')" class="minimal-button rounded-lg px-3 py-1.5 text-xs">Use</button>
+                                <button onclick="cancelAgentSessionUI('${encodeURIComponent(session.id)}')" class="minimal-button rounded-lg px-3 py-1.5 text-xs">Cancel</button>
+                                <button onclick="deleteAgentSessionUI('${encodeURIComponent(session.id)}')" class="minimal-button rounded-lg px-3 py-1.5 text-xs text-red-600 dark:text-red-300">Delete</button>
+                            </div>
+                        </div>
+                    `;
+                }).join('') : '<div class="text-sm text-slate-400 dark:text-slate-500 italic">No agent sessions yet.</div>';
+            } catch (e) {
+                if (list) list.innerHTML = `<div class="rounded-2xl border border-red-200 bg-red-50 p-4 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">${escapeHtml(e.message)}</div>`;
+            }
+        }
+
+        function copyAgentSessionRunIdUI(encodedId) {
+            const id = decodeURIComponent(encodedId);
+            const runInput = document.getElementById('agentSessionRunIdInput');
+            const parentInput = document.getElementById('agentSessionParentInput');
+            if (runInput) runInput.value = id;
+            if (parentInput) parentInput.value = id;
+        }
+
+        async function inspectAgentSessionUI(encodedId) {
+            const id = decodeURIComponent(encodedId);
+            const detail = document.getElementById('agentSessionDetail');
+            copyAgentSessionRunIdUI(encodedId);
+            try {
+                const res = await fetch('/ui/agent-sessions/' + encodeURIComponent(id), { cache: 'no-store' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to inspect session');
+                if (detail) detail.textContent = JSON.stringify(data, null, 2);
+            } catch (e) {
+                if (detail) detail.textContent = e.message;
+            }
+        }
+
+        async function createAgentSessionUI() {
+            const payload = {
+                title: document.getElementById('agentSessionTitleInput')?.value?.trim() || 'August session',
+                agent: document.getElementById('agentSessionAgentInput')?.value?.trim() || 'build',
+                parentId: document.getElementById('agentSessionParentInput')?.value?.trim() || undefined,
+                task: document.getElementById('agentSessionTaskInput')?.value?.trim() || '',
+                cwd: document.getElementById('agentSessionCwdInput')?.value?.trim() || undefined
+            };
+            try {
+                const res = await fetch('/ui/agent-sessions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to create agent session');
+                showStatus('Agent session created', 'bg-emerald-600 text-white');
+                if (data.session?.id) copyAgentSessionRunIdUI(encodeURIComponent(data.session.id));
+                await loadAgentSessionsUI();
+            } catch (e) {
+                showStatus(e.message, 'bg-red-600 text-white');
+            }
+        }
+
+        async function runAgentSessionCommandUI() {
+            const id = document.getElementById('agentSessionRunIdInput')?.value?.trim();
+            const command = document.getElementById('agentSessionCommandInput')?.value?.trim();
+            const timeoutMs = Number(document.getElementById('agentSessionTimeoutInput')?.value || 180000);
+            const approved = document.getElementById('agentSessionApprovedInput')?.checked === true;
+            const detail = document.getElementById('agentSessionDetail');
+            if (!id || !command) {
+                showStatus('Session id and command are required', 'bg-red-600 text-white');
+                return;
+            }
+            if (detail) detail.textContent = 'Running...';
+            try {
+                const res = await fetch('/ui/agent-sessions/' + encodeURIComponent(id) + '/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command, approved, timeoutMs })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Agent session run failed');
+                if (detail) detail.textContent = JSON.stringify(data, null, 2);
+                await loadAgentSessionsUI();
+            } catch (e) {
+                if (detail) detail.textContent = e.message;
+                showStatus(e.message, 'bg-red-600 text-white');
+            }
+        }
+
+        async function cancelAgentSessionUI(encodedId) {
+            const id = decodeURIComponent(encodedId);
+            try {
+                const res = await fetch('/ui/agent-sessions/' + encodeURIComponent(id) + '/cancel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reason: 'dashboard cancel' })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to cancel session');
+                await loadAgentSessionsUI();
+                await inspectAgentSessionUI(encodeURIComponent(id));
+            } catch (e) {
+                showStatus(e.message, 'bg-red-600 text-white');
+            }
+        }
+
+        async function deleteAgentSessionUI(encodedId) {
+            const id = decodeURIComponent(encodedId);
+            if (!confirm(`Delete session ${id}?`)) return;
+            try {
+                const res = await fetch('/ui/agent-sessions/' + encodeURIComponent(id) + '?includeChildren=true', { method: 'DELETE' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to delete session');
+                await loadAgentSessionsUI();
+                const detail = document.getElementById('agentSessionDetail');
+                if (detail) detail.textContent = JSON.stringify(data, null, 2);
+            } catch (e) {
+                showStatus(e.message, 'bg-red-600 text-white');
+            }
+        }
+
+/* ── August Terminal ── */
+        async function loadTerminalPanelUI() {
+            const sessionsEl = document.getElementById('terminalSessionList');
+            const approvalsEl = document.getElementById('terminalApprovalList');
+            if (!sessionsEl && !approvalsEl) return;
+            try {
+                const res = await fetch('/ui/terminal/sessions', { cache: 'no-store' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to load terminal sessions');
+                const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+                const approvals = Array.isArray(data.approvals) ? data.approvals : [];
+                if (sessionsEl) {
+                    sessionsEl.innerHTML = sessions.length ? sessions.map(session => `
+                        <div class="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
+                            <div class="flex items-start justify-between gap-2">
+                                <div class="min-w-0">
+                                    <p class="font-semibold text-slate-800 dark:text-slate-100">${escapeHtml(session.title || session.id)}</p>
+                                    <p class="mt-1 truncate font-mono text-[10px] text-slate-400">${escapeHtml(session.cwd || '')}</p>
+                                </div>
+                                ${renderTinyBadge(session.status || 'unknown', session.status === 'running' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400')}
+                            </div>
+                            <div class="mt-2 flex gap-2">
+                                <button onclick="readTerminalBufferUI('${encodeURIComponent(session.id)}')" class="minimal-button rounded-lg px-2 py-1 text-[10px]">Buffer</button>
+                                <button onclick="closeTerminalSessionUI('${encodeURIComponent(session.id)}')" class="minimal-button rounded-lg px-2 py-1 text-[10px] text-red-600 dark:text-red-300">Close</button>
+                            </div>
+                        </div>
+                    `).join('') : '<div class="text-slate-400 dark:text-slate-500">No interactive sessions.</div>';
+                }
+                if (approvalsEl) {
+                    approvalsEl.innerHTML = approvals.length ? approvals.map(item => `
+                        <div class="rounded-xl border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/30">
+                            <p class="font-semibold text-amber-800 dark:text-amber-200">${escapeHtml(item.reason || item.type || 'approval required')}</p>
+                            <p class="mt-1 break-all font-mono text-[10px] text-amber-700 dark:text-amber-300">${escapeHtml(item.command || item.inputPreview || item.id)}</p>
+                            <div class="mt-2 flex gap-2">
+                                <button onclick="approveTerminalUI('${encodeURIComponent(item.id)}', true)" class="minimal-button rounded-lg px-2 py-1 text-[10px]">Approve</button>
+                                <button onclick="approveTerminalUI('${encodeURIComponent(item.id)}', false)" class="minimal-button rounded-lg px-2 py-1 text-[10px]">Reject</button>
+                            </div>
+                        </div>
+                    `).join('') : '<div class="text-slate-400 dark:text-slate-500">No pending terminal approvals.</div>';
+                }
+            } catch (e) {
+                if (sessionsEl) sessionsEl.innerHTML = `<div class="text-red-500">${escapeHtml(e.message)}</div>`;
+            }
+        }
+
+        async function runTerminalCommandUI() {
+            const output = document.getElementById('terminalCommandOutput');
+            const command = document.getElementById('terminalCommandInput')?.value?.trim();
+            const cwd = document.getElementById('terminalCwdInput')?.value?.trim();
+            const timeoutMs = Number(document.getElementById('terminalTimeoutInput')?.value || 180000);
+            const approved = document.getElementById('terminalApprovedInput')?.checked === true;
+            if (!command) {
+                showStatus('Command is required', 'bg-red-600 text-white');
+                return;
+            }
+            if (output) output.textContent = 'Running...';
+            try {
+                const res = await fetch('/ui/terminal/command', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command, cwd, approved, timeoutMs })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Terminal command failed');
+                if (output) output.textContent = data.output || JSON.stringify(data, null, 2);
+                await loadTerminalPanelUI();
+            } catch (e) {
+                if (output) output.textContent = e.message;
+                showStatus(e.message, 'bg-red-600 text-white');
+            }
+        }
+
+        async function createTerminalSessionUI() {
+            const cwd = document.getElementById('terminalCwdInput')?.value?.trim();
+            const approvedInteractive = document.getElementById('terminalApprovedInput')?.checked === true;
+            try {
+                const res = await fetch('/ui/terminal/sessions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title: 'Dashboard shell', cwd, approvedInteractive })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to start terminal session');
+                showStatus('Terminal session started', 'bg-emerald-600 text-white');
+                await loadTerminalPanelUI();
+            } catch (e) {
+                showStatus(e.message, 'bg-red-600 text-white');
+            }
+        }
+
+        async function readTerminalBufferUI(encodedId) {
+            const id = decodeURIComponent(encodedId);
+            const output = document.getElementById('terminalCommandOutput');
+            try {
+                const res = await fetch('/ui/terminal/buffer?id=' + encodeURIComponent(id), { cache: 'no-store' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to read terminal buffer');
+                if (output) output.textContent = data.buffer || '[empty buffer]';
+            } catch (e) {
+                if (output) output.textContent = e.message;
+            }
+        }
+
+        async function closeTerminalSessionUI(encodedId) {
+            const id = decodeURIComponent(encodedId);
+            try {
+                await fetch('/ui/terminal/sessions/' + encodeURIComponent(id), { method: 'DELETE' });
+                await loadTerminalPanelUI();
+            } catch (e) {
+                showStatus(e.message, 'bg-red-600 text-white');
+            }
+        }
+
+        async function approveTerminalUI(encodedId, approve) {
+            const requestId = decodeURIComponent(encodedId);
+            const output = document.getElementById('terminalCommandOutput');
+            try {
+                const res = await fetch('/ui/terminal/approve', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ requestId, approve })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Terminal approval failed');
+                if (output) output.textContent = data.output || JSON.stringify(data, null, 2);
+                await loadTerminalPanelUI();
+            } catch (e) {
+                showStatus(e.message, 'bg-red-600 text-white');
+            }
+        }
+
+/* ── August Automations ── */
+        async function loadAutomationJobsUI() {
+            const jobsEl = document.getElementById('automationJobList');
+            const runsEl = document.getElementById('automationRunList');
+            if (!jobsEl && !runsEl) return;
+            try {
+                const res = await fetch('/ui/automations', { cache: 'no-store' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to load automations');
+                const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+                const runs = Array.isArray(data.runs) ? data.runs : [];
+                if (jobsEl) {
+                    jobsEl.innerHTML = jobs.length ? jobs.map(job => `
+                        <div class="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+                            <div class="flex items-start justify-between gap-3">
+                                <div class="min-w-0">
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-100">${escapeHtml(job.name || job.id)}</h3>
+                                        ${renderTinyBadge(job.type || 'job', 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300')}
+                                        ${job.approved ? renderTinyBadge('approved', 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300') : renderTinyBadge('approval gated', 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300')}
+                                    </div>
+                                    <p class="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">${escapeHtml(job.task || job.command || '')}</p>
+                                    <p class="mt-1 font-mono text-[10px] text-slate-400">schedule: ${escapeHtml(job.schedule || 'manual')} · timeout: ${formatExactNumber(job.timeoutMs || 0)}ms · next: ${job.nextRunAt ? new Date(job.nextRunAt).toLocaleString() : 'manual'}</p>
+                                </div>
+                            </div>
+                            <div class="mt-3 flex flex-wrap gap-2">
+                                <button onclick="runAutomationJobUI('${encodeURIComponent(job.id)}')" class="minimal-button rounded-lg px-3 py-1.5 text-xs">Run</button>
+                                <button onclick="deleteAutomationJobUI('${encodeURIComponent(job.id)}')" class="minimal-button rounded-lg px-3 py-1.5 text-xs text-red-600 dark:text-red-300">Delete</button>
+                            </div>
+                        </div>
+                    `).join('') : '<div class="text-sm text-slate-400 dark:text-slate-500 italic">No automation jobs yet.</div>';
+                }
+                if (runsEl) {
+                    runsEl.innerHTML = runs.length ? runs.slice(-12).reverse().map(run => `
+                        <div class="rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900">
+                            <div class="flex items-center justify-between gap-3">
+                                <span class="font-mono text-[10px] text-slate-400">${escapeHtml(run.jobId || '')}</span>
+                                ${renderTinyBadge(run.status || 'unknown', run.status === 'completed' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : run.status === 'approval_required' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300' : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400')}
+                            </div>
+                            <p class="mt-1 text-[11px] leading-5">${escapeHtml(run.output || '')}</p>
+                        </div>
+                    `).join('') : 'No runs yet.';
+                }
+            } catch (e) {
+                if (jobsEl) jobsEl.innerHTML = `<div class="text-red-500">${escapeHtml(e.message)}</div>`;
+            }
+        }
+
+        async function saveAutomationJobUI() {
+            const type = document.getElementById('automationTypeInput')?.value || 'memory_event';
+            const command = document.getElementById('automationCommandInput')?.value?.trim() || '';
+            if (type === 'command' && !command) {
+                showStatus('Command jobs need a command', 'bg-red-600 text-white');
+                return;
+            }
+            const payload = {
+                name: document.getElementById('automationNameInput')?.value?.trim() || 'August automation',
+                schedule: document.getElementById('automationScheduleInput')?.value?.trim() || 'manual',
+                type,
+                agent: document.getElementById('automationAgentInput')?.value?.trim() || 'build',
+                task: document.getElementById('automationTaskInput')?.value?.trim() || '',
+                command,
+                cwd: document.getElementById('automationCwdInput')?.value?.trim() || undefined,
+                timeoutMs: Number(document.getElementById('automationTimeoutInput')?.value || 180000),
+                approved: document.getElementById('automationApprovedInput')?.checked === true
+            };
+            try {
+                const res = await fetch('/ui/automations', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to save automation');
+                showStatus('Automation saved', 'bg-emerald-600 text-white');
+                await loadAutomationJobsUI();
+            } catch (e) {
+                showStatus(e.message, 'bg-red-600 text-white');
+            }
+        }
+
+        async function runAutomationJobUI(encodedId) {
+            const id = decodeURIComponent(encodedId);
+            try {
+                const res = await fetch('/ui/automations/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Automation run failed');
+                showStatus(`Automation run: ${data.run?.status || data.result?.status || 'done'}`, 'bg-slate-700 text-white');
+                await loadAutomationJobsUI();
+            } catch (e) {
+                showStatus(e.message, 'bg-red-600 text-white');
+            }
+        }
+
+        async function deleteAutomationJobUI(encodedId) {
+            const id = decodeURIComponent(encodedId);
+            if (!confirm(`Delete automation ${id}?`)) return;
+            try {
+                await fetch('/ui/automations/' + encodeURIComponent(id), { method: 'DELETE' });
+                await loadAutomationJobsUI();
+            } catch (e) {
+                showStatus(e.message, 'bg-red-600 text-white');
+            }
+        }
+
+/* ── August Governance & Diagnostics ── */
+        function renderGovernanceCard(title, items, renderButtons) {
+            const content = items.length ? items.map(item => `
+                <div class="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
+                    <p class="font-semibold text-slate-800 dark:text-slate-100">${escapeHtml(item.title || item.key || item.topic || 'Memory')}</p>
+                    <p class="mt-1 text-[11px] leading-5 text-slate-500 dark:text-slate-400">${escapeHtml(item.summary || item.value || '')}</p>
+                    <div class="mt-2 flex flex-wrap gap-2">${renderButtons(item)}</div>
+                </div>
+            `).join('') : '<div class="text-xs text-slate-400 dark:text-slate-500">No matches.</div>';
+            return `
+                <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950">
+                    <h3 class="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">${escapeHtml(title)}</h3>
+                    <div class="mt-3 grid gap-2">${content}</div>
+                </div>
+            `;
+        }
+
+        async function searchMemoryGovernanceUI() {
+            const results = document.getElementById('governanceResults');
+            if (!results) return;
+            const query = document.getElementById('governanceQueryInput')?.value?.trim() || 'august brain';
+            results.innerHTML = '<div class="text-sm text-slate-400 dark:text-slate-500 italic">Searching...</div>';
+            try {
+                const res = await fetch('/ui/memory/governance?q=' + encodeURIComponent(query), { cache: 'no-store' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Memory governance search failed');
+                const core = Array.isArray(data.core) ? data.core : [];
+                const semantic = Array.isArray(data.semantic) ? data.semantic : [];
+                const vector = Array.isArray(data.vector) ? data.vector : [];
+                results.innerHTML = [
+                    renderGovernanceCard('Core Memory', core, item => `
+                        <button onclick="applyMemoryGovernanceUI('pin_core', { type: '${encodeURIComponent(item.type || '')}', key: '${encodeURIComponent(item.key || '')}' })" class="minimal-button rounded-lg px-2 py-1 text-[10px]">Pin</button>
+                        <button onclick="applyMemoryGovernanceUI('archive_core', { type: '${encodeURIComponent(item.type || '')}', key: '${encodeURIComponent(item.key || '')}' })" class="minimal-button rounded-lg px-2 py-1 text-[10px]">Archive</button>
+                        <button onclick="applyMemoryGovernanceUI('forget_core', { type: '${encodeURIComponent(item.type || '')}', key: '${encodeURIComponent(item.key || '')}' })" class="minimal-button rounded-lg px-2 py-1 text-[10px] text-red-600 dark:text-red-300">Forget</button>
+                    `),
+                    renderGovernanceCard('Semantic Facts', semantic.map(item => ({ ...item, title: item.key, summary: item.value })), item => `
+                        <button onclick="applyMemoryGovernanceUI('forget_semantic', { key: '${encodeURIComponent(item.key || '')}' })" class="minimal-button rounded-lg px-2 py-1 text-[10px] text-red-600 dark:text-red-300">Forget</button>
+                    `),
+                    renderGovernanceCard('Vector Memory', vector.map(item => ({ ...item, title: item.topic })), item => `
+                        <button onclick="applyMemoryGovernanceUI('forget_vector', { id: '${encodeURIComponent(item.id || '')}' })" class="minimal-button rounded-lg px-2 py-1 text-[10px] text-red-600 dark:text-red-300">Forget</button>
+                    `)
+                ].join('');
+            } catch (e) {
+                results.innerHTML = `<div class="rounded-2xl border border-red-200 bg-red-50 p-4 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">${escapeHtml(e.message)}</div>`;
+            }
+        }
+
+        async function loadBrainDiagnosticsUI() {
+            const summary = document.getElementById('brainDiagnosticsSummary');
+            const checksEl = document.getElementById('brainDiagnosticsChecks');
+            if (!summary && !checksEl) return;
+            try {
+                const res = await fetch('/ui/brain/diagnostics', { cache: 'no-store' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Diagnostics failed');
+                if (summary) {
+                    const counts = data.counts || {};
+                    summary.textContent = `Status ${data.summary?.overall || 'unknown'} · ${formatExactNumber(counts.semanticFacts || 0)} facts · ${formatExactNumber(counts.vectorEntries || 0)} vectors · ${formatExactNumber(counts.coreCheckpoints || 0)} checkpoints.`;
+                }
+                if (checksEl) {
+                    const checks = Array.isArray(data.checks) ? data.checks : [];
+                    checksEl.innerHTML = checks.map(check => {
+                        const klass = check.status === 'error'
+                            ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+                            : check.status === 'warn'
+                                ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                                : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300';
+                        return `
+                            <div class="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+                                <div class="flex items-start justify-between gap-3">
+                                    <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-100">${escapeHtml(check.label || check.id)}</h3>
+                                    ${renderTinyBadge(check.status || 'ok', klass)}
+                                </div>
+                                <p class="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">${escapeHtml(check.detail || '')}</p>
+                                ${check.action ? `<p class="mt-2 rounded-xl bg-slate-50 px-3 py-2 text-[11px] text-slate-500 dark:bg-slate-950 dark:text-slate-400">${escapeHtml(check.action)}</p>` : ''}
+                            </div>
+                        `;
+                    }).join('');
+                }
+            } catch (e) {
+                if (summary) summary.textContent = 'Diagnostics failed: ' + e.message;
             }
         }
 
@@ -1002,7 +1719,6 @@ function loadMcpSkillsUI() {
                 const payload = {};
                 if (apiKey) payload.supermemoryApiKey = apiKey;
                 if (url) payload.supermemoryUrl = url;
-                payload.profile = 'claude';
                 const res = await fetch('/ui/save', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1023,25 +1739,58 @@ function loadMcpSkillsUI() {
             if (!query) { result.textContent = 'Enter a search query'; return; }
             result.textContent = 'Searching...';
             try {
-                const cfg = await (await fetch('/ui/config/safe', { cache: 'no-store' })).json();
-                const apiKey = cfg.supermemoryApiKey;
-                if (!apiKey) { result.textContent = 'No supermemory API key configured'; return; }
-                const searchRes = await fetch('https://supermemory.ai/api/search?q=' + encodeURIComponent(query), {
-                    headers: { 'Authorization': 'Bearer ' + apiKey },
-                    signal: AbortSignal.timeout(10000)
+                const searchRes = await fetch('/ui/supermemory/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query }),
+                    signal: AbortSignal.timeout(20000)
                 });
                 if (!searchRes.ok) {
                     result.textContent = 'HTTP ' + searchRes.status + ': ' + (await searchRes.text()).slice(0, 200);
                     return;
                 }
                 const data = await searchRes.json();
-                const items = data.results || data.data || [];
+                if (data.configured === false) {
+                    result.textContent = data.error || 'Supermemory is not configured';
+                    return;
+                }
+                const items = data.results || [];
                 if (items.length === 0) { result.textContent = 'No results'; return; }
                 result.textContent = items.slice(0, 5).map((r, i) =>
-                    `[${i + 1}] ${r.title || r.content?.slice(0, 100) || '(untitled)'}`
+                    `[${i + 1}] ${r.text?.slice(0, 180) || '(untitled)'}${r.similarity ? `\nscore: ${Math.round(r.similarity * 100)}%` : ''}`
                 ).join('\n---\n');
             } catch (e) {
                 result.textContent = e.message;
+            }
+        }
+
+        function decodeGovernancePayload(payload) {
+            if (!payload || typeof payload !== 'object') return {};
+            const decoded = {};
+            for (const [key, value] of Object.entries(payload)) {
+                decoded[key] = typeof value === 'string' ? decodeURIComponent(value) : value;
+            }
+            return decoded;
+        }
+
+        async function applyMemoryGovernanceUI(action, target) {
+            try {
+                const body = target && typeof target === 'object'
+                    ? { action, ...decodeGovernancePayload(target) }
+                    : action === 'forget_vector'
+                        ? { action, id: target }
+                        : { action };
+                const res = await fetch('/ui/memory/governance', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Memory governance failed');
+                await Promise.all([loadMemoryItemsUI(), searchMemoryUI(), searchMemoryGovernanceUI(), loadMemoryPreview()]);
+                showStatus('Memory governance updated', 'bg-emerald-600 text-white');
+            } catch (e) {
+                showStatus(e.message, 'bg-red-600 text-white');
             }
         }
 

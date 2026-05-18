@@ -123,7 +123,55 @@ function clearExpired() {
     writeDB(readDB().filter(f => !isExpired(f)));
 }
 
+function safeKey(value) {
+    return String(value || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 80);
+}
+
+function backfillFactsFromCoreMemory(memory, source = 'core-memory') {
+    let written = 0;
+    const projects = Array.isArray(memory?.active_projects) ? memory.active_projects : [];
+    for (const project of projects) {
+        if (!project?.name || !project?.summary) continue;
+        setFact(
+            `project_${safeKey(project.name)}`,
+            `${project.name}${project.status ? ` (${project.status})` : ''}: ${project.summary}`,
+            'project_info',
+            null,
+            source
+        );
+        written++;
+    }
+
+    const integrations = memory?.integrations && typeof memory.integrations === 'object'
+        ? memory.integrations
+        : {};
+    for (const [name, integration] of Object.entries(integrations)) {
+        const summary = typeof integration === 'string'
+            ? integration
+            : (integration?.summary || integration?.status || '');
+        if (!name || !summary) continue;
+        setFact(
+            `integration_${safeKey(name)}`,
+            `${name}: ${summary}`,
+            'workflow_rule',
+            null,
+            source
+        );
+        written++;
+    }
+
+    return {
+        written,
+        count: factCount()
+    };
+}
+
 module.exports = {
+    backfillFactsFromCoreMemory,
     setFact,
     getFact,
     searchFacts,

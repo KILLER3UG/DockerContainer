@@ -172,7 +172,7 @@ function getCoworkToolDefinitions() {
             type: 'function',
             function: {
                 name: 'mcp__cowork__import_capability_link',
-                description: '[Cowork compatibility] Import a custom proxy plugin, MCP server, or skill from a GitHub/raw/http link. MCP servers are saved disabled unless enable_mcp is true.',
+                description: '[Cowork compatibility] Import a custom proxy plugin, MCP server, or skill from a GitHub/raw/http link. Saved skills are shared through the proxy-global skill catalog. MCP servers are saved disabled unless enable_mcp is true.',
                 parameters: {
                     type: 'object',
                     properties: {
@@ -362,7 +362,7 @@ async function executeCoworkToolCall(toolName, args = {}) {
                 ...imported,
                 note: imported.enabledMcpServers.length > 0
                     ? 'Imported MCP servers were enabled; restart MCP servers if the dashboard did not already do it.'
-                    : 'Imported MCP servers were saved disabled by default. Enable them from the MCP & Skills dashboard after reviewing the command.'
+                    : 'Imported skills are available to all proxy clients on the next request. Imported MCP servers were saved disabled by default; enable them from the MCP & Skills dashboard after reviewing the command.'
             };
         }
 

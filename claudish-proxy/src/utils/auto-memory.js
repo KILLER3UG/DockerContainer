@@ -63,6 +63,147 @@ console.warn = function(...args) {
     _origWarn.apply(console, args);
 };
 
+function looksLikeProviderAlias(model) {
+    const value = String(model || '').trim().toLowerCase();
+    return value.startsWith('claude-') || value.startsWith('gpt-');
+}
+
+function providerErrorFromData(data) {
+    if (!data || typeof data !== 'object') return '';
+    if (data.base_resp && Number(data.base_resp.status_code || 0) !== 0) {
+        return data.base_resp.status_msg || `provider status ${data.base_resp.status_code}`;
+    }
+    if (data.error) {
+        if (typeof data.error === 'string') return data.error;
+        return data.error.message || JSON.stringify(data.error);
+    }
+    return '';
+}
+
+function extractModelJsonText(data) {
+    if (data?.choices?.[0]?.message) {
+        return extractTextFromContent(data.choices[0].message.content);
+    }
+    if (data?.content?.[0]) {
+        return data.content[0].text || '';
+    }
+    return '';
+}
+
+function cleanJsonPayload(text) {
+    let cleanJsonStr = String(text || '').replace(/```json|```/gi, '').trim();
+    cleanJsonStr = cleanJsonStr.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+    const firstBrace = cleanJsonStr.indexOf('{');
+    const lastBrace = cleanJsonStr.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1) {
+        cleanJsonStr = cleanJsonStr.slice(firstBrace, lastBrace + 1);
+    }
+    return cleanJsonStr;
+}
+
+function resolveMemoryExtractionModel(cfg, upstreamModel, isAnthropicNative, targetUrl) {
+    const configured = cfg.memoryExtractionModel || cfg.memoryModel;
+    let model = configured || upstreamModel || cfg._upstreamModel || cfg.currentModel || 'MiniMax-M2.7';
+    const isMiniMaxOpenAiCompat = !isAnthropicNative && String(targetUrl || '').includes('minimax');
+    if (isMiniMaxOpenAiCompat && looksLikeProviderAlias(model)) {
+        model = configured || 'MiniMax-M2.7';
+    } else if (!isAnthropicNative && looksLikeProviderAlias(model)) {
+        model = configured || (!looksLikeProviderAlias(cfg._upstreamModel) ? cfg._upstreamModel : null) || 'MiniMax-M2.7';
+    }
+    return model || 'MiniMax-M2.7';
+}
+
+function summarizeSnippet(text, maxLength = 180) {
+    return String(text || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, maxLength);
+}
+
+function fallbackExtraction(textOnlyMessages, assistantText, reason) {
+    const lastUserText = textOnlyMessages[textOnlyMessages.length - 1]?.content || '';
+    const topic = summarizeSnippet(lastUserText, 64) || 'Conversation checkpoint';
+    const summary = [
+        summarizeSnippet(lastUserText, 160),
+        summarizeSnippet(assistantText, 180)
+    ].filter(Boolean).join(' | ');
+
+    return {
+        add_facts: [],
+        delete_facts: [],
+        conversation_summary: {
+            topic,
+            summary: summary || `Auto-memory fallback checkpoint because extraction failed: ${reason || 'unknown'}`
+        },
+        _fallbackReason: reason || 'provider unavailable'
+    };
+}
+
+async function saveCheckpointToVectorDb(cfg, topic, summary) {
+    const { saveCheckpointWithEmbedding } = require('./vector-db');
+    let embeddingsUrl = cfg.targetUrl;
+    if (embeddingsUrl && embeddingsUrl.includes('/anthropic')) {
+        embeddingsUrl = embeddingsUrl.replace('/anthropic/v1/messages', '/v1/embeddings').replace('/anthropic', '/v1/embeddings');
+    } else if (embeddingsUrl && embeddingsUrl.includes('/v1/')) {
+        embeddingsUrl = embeddingsUrl.substring(0, embeddingsUrl.indexOf('/v1/') + 4) + 'embeddings';
+    } else {
+        embeddingsUrl = null;
+    }
+
+    const textToEmbed = `Topic: ${topic}\nSummary: ${summary}`;
+    const fallbackSave = (reason) => {
+        const saved = saveCheckpointWithEmbedding(topic, summary, null, {
+            embeddingSource: `local-fallback:${summarizeSnippet(reason, 80) || 'embedding unavailable'}`
+        });
+        console.warn(`[Auto-Memory] Saved checkpoint with local vector fallback: ${reason}`);
+        return saved;
+    };
+
+    if (!embeddingsUrl) return fallbackSave('embedding endpoint unavailable');
+
+    try {
+        const embedHeaders = { 'Content-Type': 'application/json' };
+        if (cfg.apiKey) {
+            embedHeaders['Authorization'] = `Bearer ${cfg.apiKey}`;
+            embedHeaders['x-api-key'] = cfg.apiKey;
+        }
+
+        const isMiniMaxEmbed = embeddingsUrl.includes('minimax');
+        const embedModel = cfg.embeddingModel || (isMiniMaxEmbed ? 'embo-01' : 'text-embedding-3-small');
+        const embedPayload = isMiniMaxEmbed
+            ? { model: embedModel, texts: [textToEmbed], type: 'query' }
+            : { model: embedModel, input: textToEmbed };
+
+        const embedResponse = await fetch(embeddingsUrl, {
+            method: 'POST',
+            headers: embedHeaders,
+            body: JSON.stringify(embedPayload),
+            signal: AbortSignal.timeout(10000)
+        });
+
+        const raw = await embedResponse.text();
+        if (!embedResponse.ok) {
+            return fallbackSave(`HTTP ${embedResponse.status} ${raw.slice(0, 120)}`);
+        }
+
+        let embedData = {};
+        try { embedData = JSON.parse(raw); } catch (e) {
+            return fallbackSave(`embedding JSON parse failed: ${e.message}`);
+        }
+
+        const providerError = providerErrorFromData(embedData);
+        if (providerError) return fallbackSave(providerError);
+
+        const vector = isMiniMaxEmbed ? embedData.vectors?.[0] : embedData.data?.[0]?.embedding;
+        if (!Array.isArray(vector)) return fallbackSave('provider returned no embedding vector');
+
+        saveCheckpointWithEmbedding(topic, summary, vector, { embeddingSource: 'provider' });
+        console.log(`[Auto-Memory] ✓ Saved checkpoint to Infinite Vector Database.`);
+    } catch (err) {
+        fallbackSave(err.message);
+    }
+}
+
 /**
  * Fires asynchronously at the end of a successful conversation turn.
  * Extracts persistent facts from the conversation and saves them to August Core Memory.
@@ -164,12 +305,8 @@ Respond ONLY with valid JSON in this exact format:
             }
             console.log(`[Auto-Memory] Using OpenAI-compatible format -> ${targetUrl}`);
 
-            // Ensure we never send the fake Claude Desktop aliases (claude-opus-4-6, etc.) to OpenAI-compatible upstreams
-            let memModel = upstreamModel;
-            if (memModel && memModel.startsWith('claude-') && !isAnthropicNative) {
-                memModel = cfg._upstreamModel || cfg.currentModel || "MiniMax-M2.7";
-            }
-            if (!memModel) memModel = "MiniMax-M2.7";
+            // Ensure we never send fake Claude/GPT client aliases to OpenAI-compatible upstreams.
+            const memModel = resolveMemoryExtractionModel(cfg, upstreamModel, isAnthropicNative, targetUrl);
             
             const payload = {
                 model: memModel,
@@ -197,39 +334,35 @@ Respond ONLY with valid JSON in this exact format:
             });
         }
 
+        let extracted;
         if (!response.ok) {
             const errBody = await response.text().catch(() => '');
-            console.warn(`[Auto-Memory] Extraction API returned HTTP ${response.status}: ${errBody.slice(0, 200)}`);
-            return;
-        }
+            const reason = `HTTP ${response.status}: ${errBody.slice(0, 200)}`;
+            console.warn(`[Auto-Memory] Extraction API returned ${reason}. Using local fallback checkpoint.`);
+            extracted = fallbackExtraction(textOnlyMessages, assistantText, reason);
+        } else {
+            const data = await response.json();
+            const extractionProviderError = providerErrorFromData(data);
+            if (extractionProviderError) {
+                console.warn(`[Auto-Memory] Extraction provider error: ${extractionProviderError}. Using local fallback checkpoint.`);
+                extracted = fallbackExtraction(textOnlyMessages, assistantText, extractionProviderError);
+            } else {
+                const jsonStr = extractModelJsonText(data);
 
-        const data = await response.json();
-        let jsonStr = '';
-        if (data.choices && data.choices[0] && data.choices[0].message) {
-            jsonStr = data.choices[0].message.content;
-        } else if (data.content && data.content[0]) {
-            jsonStr = data.content[0].text;
+                if (!jsonStr) {
+                    console.log('[Auto-Memory] Extraction model returned empty content; using local fallback checkpoint.');
+                    extracted = fallbackExtraction(textOnlyMessages, assistantText, 'empty extraction response');
+                } else {
+                    console.log(`[Auto-Memory] Raw extraction response: ${jsonStr.slice(0, 200)}`);
+                    try {
+                        extracted = JSON.parse(cleanJsonPayload(jsonStr));
+                    } catch (parseErr) {
+                        console.warn(`[Auto-Memory] Extraction JSON parse failed: ${parseErr.message}. Using local fallback checkpoint.`);
+                        extracted = fallbackExtraction(textOnlyMessages, assistantText, parseErr.message);
+                    }
+                }
+            }
         }
-
-        if (!jsonStr) {
-            console.log('[Auto-Memory] Extraction model returned empty content');
-            return;
-        }
-
-        console.log(`[Auto-Memory] Raw extraction response: ${jsonStr.slice(0, 200)}`);
-        
-        let cleanJsonStr = jsonStr.replace(/```json|```/gi, '').trim();
-        // Strip out <think> blocks that reasoning models (like Minimax/DeepSeek) prepend
-        cleanJsonStr = cleanJsonStr.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-        
-        // Find the first { and last } to ensure we only parse the JSON object
-        const firstBrace = cleanJsonStr.indexOf('{');
-        const lastBrace = cleanJsonStr.lastIndexOf('}');
-        if (firstBrace !== -1 && lastBrace !== -1) {
-            cleanJsonStr = cleanJsonStr.slice(firstBrace, lastBrace + 1);
-        }
-
-        const extracted = JSON.parse(cleanJsonStr);
         
         let updatedContext = currentContext;
         let modified = false;
@@ -263,56 +396,11 @@ Respond ONLY with valid JSON in this exact format:
             }
 
             // --- VECTOR DB INTEGRATION ---
-            try {
-                let embeddingsUrl = cfg.targetUrl;
-                if (embeddingsUrl.includes('/anthropic')) {
-                    embeddingsUrl = embeddingsUrl.replace('/anthropic/v1/messages', '/v1/embeddings').replace('/anthropic', '/v1/embeddings');
-                } else if (embeddingsUrl.includes('/v1/')) {
-                    embeddingsUrl = embeddingsUrl.substring(0, embeddingsUrl.indexOf('/v1/') + 4) + 'embeddings';
-                } else {
-                    embeddingsUrl = null;
-                }
-
-                if (embeddingsUrl) {
-                    const textToEmbed = `Topic: ${extracted.conversation_summary.topic}\nSummary: ${extracted.conversation_summary.summary}`;
-                    const embedHeaders = { 'Content-Type': 'application/json' };
-                    if (cfg.apiKey) {
-                        embedHeaders['Authorization'] = `Bearer ${cfg.apiKey}`;
-                        embedHeaders['x-api-key'] = cfg.apiKey;
-                    }
-                    
-                    const embedModel = cfg.embeddingModel || (embeddingsUrl.includes('minimax') ? 'embo-01' : 'text-embedding-3-small');
-
-                    const embedResponse = await fetch(embeddingsUrl, {
-                        method: 'POST',
-                        headers: embedHeaders,
-                        body: JSON.stringify({
-                            model: embedModel,
-                            input: textToEmbed
-                        }),
-                        signal: AbortSignal.timeout(10000)
-                    });
-                    
-                    if (embedResponse.ok) {
-                        const embedData = await embedResponse.json();
-                        const vector = embedData.data?.[0]?.embedding;
-                        if (vector && Array.isArray(vector)) {
-                            const { saveCheckpointWithEmbedding } = require('./vector-db');
-                            saveCheckpointWithEmbedding(
-                                extracted.conversation_summary.topic,
-                                extracted.conversation_summary.summary,
-                                vector
-                            );
-                            console.log(`[Auto-Memory] ✓ Saved checkpoint to Infinite Vector Database.`);
-                        }
-                    } else {
-                        const errText = await embedResponse.text().catch(() => '');
-                        console.warn(`[Auto-Memory] Failed to get embedding for infinite memory: HTTP ${embedResponse.status} ${errText.slice(0, 100)}`);
-                    }
-                }
-            } catch (err) {
-                console.warn('[Auto-Memory] Vector DB integration error:', err.message);
-            }
+            await saveCheckpointToVectorDb(
+                cfg,
+                extracted.conversation_summary.topic,
+                extracted.conversation_summary.summary
+            );
 
             modified = true;
         }
@@ -330,8 +418,16 @@ Respond ONLY with valid JSON in this exact format:
             const lastUserText = textOnlyMessages[textOnlyMessages.length - 1]?.content || '';
             const sourceId = clientId || 'unknown';
             const semanticPrompt = `Extract durable semantic facts from this user message. Return ONLY valid JSON array where each item has: {"key": "short_identifier", "value": "fact text", "category": "user_preference|user_detail|project_info|workflow_rule"}. If no facts, return []. Do not include markdown formatting.`;
+            let semTargetUrl = cfg.targetUrl;
+            if (semTargetUrl.includes('/anthropic/v1/messages')) {
+                semTargetUrl = semTargetUrl.replace('/anthropic/v1/messages', semTargetUrl.includes('minimax') ? '/v1/text/chatcompletion_v2' : '/v1/chat/completions');
+            } else if (semTargetUrl.includes('/anthropic') && !semTargetUrl.includes('/chat/completions')) {
+                semTargetUrl = semTargetUrl.replace('/v1/messages', '/v1/chat/completions');
+            }
+
+            const isMiniMaxSem = semTargetUrl.includes('minimax');
             const semPayload = {
-                model: upstreamModel || 'MiniMax-M2.7',
+                model: isMiniMaxSem ? 'MiniMax-M2.7' : (upstreamModel || 'MiniMax-M2.7'),
                 messages: [
                     { role: 'system', content: semanticPrompt },
                     { role: 'user', content: lastUserText }
@@ -339,13 +435,6 @@ Respond ONLY with valid JSON in this exact format:
                 max_tokens: 500,
                 temperature: 0.1
             };
-
-            let semTargetUrl = cfg.targetUrl;
-            if (semTargetUrl.includes('/anthropic/v1/messages')) {
-                semTargetUrl = semTargetUrl.replace('/anthropic/v1/messages', semTargetUrl.includes('minimax') ? '/v1/text/chatcompletion_v2' : '/v1/chat/completions');
-            } else if (semTargetUrl.includes('/anthropic') && !semTargetUrl.includes('/chat/completions')) {
-                semTargetUrl = semTargetUrl.replace('/v1/messages', '/v1/chat/completions');
-            }
 
             const semHeaders = { 'Content-Type': 'application/json' };
             if (cfg.apiKey) semHeaders['Authorization'] = `Bearer ${cfg.apiKey}`;
@@ -359,27 +448,31 @@ Respond ONLY with valid JSON in this exact format:
 
             if (semResponse.ok) {
                 const semData = await semResponse.json();
-                let semText = semData.choices?.[0]?.message?.content || '';
-                semText = semText.replace(/```json|```/gi, '').trim();
-                const firstB = semText.indexOf('[');
-                const lastB = semText.lastIndexOf(']');
-                if (firstB !== -1 && lastB !== -1) {
-                    semText = semText.slice(firstB, lastB + 1);
-                }
-                const semFacts = JSON.parse(semText);
-                if (Array.isArray(semFacts) && semFacts.length > 0) {
-                    for (const fact of semFacts) {
-                        if (fact.key && fact.value) {
-                            semanticMemory.setFact(
-                                fact.key,
-                                fact.value,
-                                fact.category || 'user_preference',
-                                null,
-                                sourceId
-                            );
-                        }
+                if (semData.base_resp && semData.base_resp.status_code !== 0) {
+                    console.log(`[Auto-Memory] Semantic extraction API error: ${semData.base_resp.status_msg}`);
+                } else {
+                    let semText = semData.choices?.[0]?.message?.content || '';
+                    semText = semText.replace(/```json|```/gi, '').trim();
+                    const firstB = semText.indexOf('[');
+                    const lastB = semText.lastIndexOf(']');
+                    if (firstB !== -1 && lastB !== -1) {
+                        semText = semText.slice(firstB, lastB + 1);
                     }
-                    console.log(`[Auto-Memory] ✓ Extracted ${semFacts.length} semantic facts (source: ${sourceId})`);
+                    const semFacts = JSON.parse(semText);
+                    if (Array.isArray(semFacts) && semFacts.length > 0) {
+                        for (const fact of semFacts) {
+                            if (fact.key && fact.value) {
+                                semanticMemory.setFact(
+                                    fact.key,
+                                    fact.value,
+                                    fact.category || 'user_preference',
+                                    null,
+                                    sourceId
+                                );
+                            }
+                        }
+                        console.log(`[Auto-Memory] ✓ Extracted ${semFacts.length} semantic facts (source: ${sourceId})`);
+                    }
                 }
             }
         } catch (semErr) {

@@ -2,6 +2,11 @@ request-log.json
 .env
 host-agent/node_modules/
 src/august_infinite_memory.json
+src/august_brain.sqlite*
+src/august_automation_jobs.json
+src/august_automation_jobs.tick.lock
+src/august_agents.json
+src/august_agent_sessions.json
 src/august_semantic_memory.json
 src/utils/debug.txt
 *.tmp

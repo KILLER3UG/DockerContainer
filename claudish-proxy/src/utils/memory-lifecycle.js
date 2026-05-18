@@ -1,5 +1,6 @@
 const { readAugustCoreMemory, writeAugustCoreMemory } = require('./august-tools');
 const { readVectorEntries, searchTextEntries } = require('./vector-db');
+const { factCount, searchFacts } = require('./semantic-memory');
 
 const ALLOWED_STATUSES = new Set(['active', 'stale', 'archived']);
 
@@ -114,7 +115,7 @@ function updateMemoryItem({ type, key, updates }) {
 
 function searchMemory(query, { limit = 8 } = {}) {
     const q = String(query || '').trim().toLowerCase();
-    if (!q) return { query, core: [], vector: [] };
+    if (!q) return { query, core: [], semantic: [], vector: [], vectorCount: readVectorEntries().length, semanticCount: factCount() };
     const terms = q.split(/\s+/).filter(Boolean);
     const core = listMemoryItems()
         .map(item => {
@@ -126,8 +127,18 @@ function searchMemory(query, { limit = 8 } = {}) {
         .sort((a, b) => b.matches - a.matches || b.injection.score - a.injection.score)
         .slice(0, limit);
 
+    const semantic = searchFacts(query)
+        .map(fact => ({
+            key: fact.key,
+            value: fact.value,
+            category: fact.category,
+            source: fact.source,
+            updated: fact.updated
+        }))
+        .slice(0, limit);
+
     const vector = searchTextEntries(query, limit);
-    return { query, core, vector, vectorCount: readVectorEntries().length };
+    return { query, core, semantic, vector, vectorCount: readVectorEntries().length, semanticCount: factCount() };
 }
 
 module.exports = {

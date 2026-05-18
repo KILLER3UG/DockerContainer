@@ -5,6 +5,7 @@ const { getMcpServersForUi } = require('./mcp-registry');
 const { getMcpServerStatus } = require('./mcp-client');
 const { getPlugins } = require('./plugins');
 const { getSkills } = require('./skills');
+const { getBrainDiagnostics } = require('./brain-diagnostics');
 
 function statusRank(status) {
     if (status === 'error') return 3;
@@ -40,6 +41,7 @@ function getCapabilityHealth() {
     const plugins = getPlugins();
     const skills = getSkills();
     const compatibility = getCompatibilityStatus();
+    const brain = getBrainDiagnostics();
     const contextMaxChars = Number(config.memoryContextMaxChars || DEFAULT_CONTEXT_MAX_CHARS);
     const promptDetails = buildSystemPromptDetails(null, {
         model: claude._upstreamModel || claude.currentModel,
@@ -95,6 +97,10 @@ function getCapabilityHealth() {
         action: promptDetails.globalContext.compacted ? 'Review lifecycle pins or raise the Brain Limit if needed.' : ''
     });
 
+    brain.checks
+        .filter(check => ['semantic-memory', 'vector-memory', 'supermemory-config', 'auto-memory-log'].includes(check.id))
+        .forEach(check => checks.push(check));
+
     checks.push({
         id: 'plugins',
         area: 'plugins',
@@ -112,10 +118,13 @@ function getCapabilityHealth() {
             { label: 'Overall', value: summary.overall, status: summary.overall },
             { label: 'Enabled MCP', value: mcpServers.filter(server => server.enabled !== false).length, status: 'ok' },
             { label: 'Proxy Plugins', value: plugins.length, status: plugins.length ? 'ok' : 'warn' },
-            { label: 'Brain Limit', value: contextMaxChars, status: promptDetails.globalContext.compacted ? 'warn' : 'ok' }
+            { label: 'Brain Limit', value: contextMaxChars, status: promptDetails.globalContext.compacted ? 'warn' : 'ok' },
+            { label: 'Vector DB', value: brain.counts.vectorEntries, status: brain.counts.vectorEntries ? 'ok' : 'warn' },
+            { label: 'Semantic Facts', value: brain.counts.semanticFacts, status: brain.counts.semanticFacts ? 'ok' : 'warn' }
         ],
         checks: checks.sort((a, b) => statusRank(b.status) - statusRank(a.status) || a.label.localeCompare(b.label)),
-        compatibility
+        compatibility,
+        brain
     };
 }
 

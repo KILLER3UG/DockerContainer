@@ -3,7 +3,198 @@
 /* Helper: fill prompt from welcome chips */
 function fillWorkbenchPrompt(text) {
     const input = document.getElementById('workbenchInput');
-    if (input) { input.value = text; autoResizeTextarea(input); }
+    if (input) {
+        input.value = text;
+        autoResizeTextarea(input);
+        closeSlashPalette();
+        input.focus();
+    }
+}
+
+const WORKBENCH_BASE_SLASH_COMMANDS = [
+    {
+        id: 'cmd-skills',
+        label: '/skills',
+        title: 'Show skills',
+        kind: 'command',
+        description: 'List available skills and when to use them.',
+        insert: 'List the available skills I can use and when each one fits.'
+    },
+    {
+        id: 'cmd-tools',
+        label: '/tools',
+        title: 'Show tools',
+        kind: 'command',
+        description: 'List the proxy tools grouped by capability.',
+        insert: 'List the Workbench tools I can use, grouped by capability.'
+    },
+    {
+        id: 'cmd-agents',
+        label: '/agents',
+        title: 'Show agents',
+        kind: 'command',
+        description: 'List build, plan, explore, and general agents with inherited permissions.',
+        insert: 'List the Workbench agent registry and explain inherited permissions.'
+    },
+    {
+        id: 'cmd-btw',
+        label: '/btw',
+        title: 'Ask aside',
+        kind: 'side chat',
+        description: 'Ask a quick side question while the main agent keeps running.',
+        insert: '/btw '
+    },
+    {
+        id: 'cmd-goal',
+        label: '/goal',
+        title: 'Set goal',
+        kind: 'autonomy',
+        description: 'Keep the agent working until the goal evaluator says the goal is reached.',
+        insert: '/goal '
+    },
+    {
+        id: 'cmd-goal-clear',
+        label: '/goal clear',
+        title: 'Clear goal',
+        kind: 'autonomy',
+        description: 'Stop the active goal loop.',
+        insert: '/goal clear'
+    },
+    {
+        id: 'cmd-fetch-skill',
+        label: '/fetch-skill',
+        title: 'Fetch a skill',
+        kind: 'command',
+        description: 'Find and preview a skill from the web or GitHub.',
+        insert: 'Find a skill from the internet or GitHub for: '
+    },
+    {
+        id: 'cmd-plan',
+        label: '/plan',
+        title: 'Create a plan',
+        kind: 'command',
+        description: 'Ask August to plan first and wait for approval.',
+        insert: 'Create a plan first and wait for my approval before changing anything: '
+    },
+    {
+        id: 'cmd-diagnose',
+        label: '/diagnose',
+        title: 'Diagnose proxy',
+        kind: 'command',
+        description: 'Check proxy health, memory, MCP, tools, and recent errors.',
+        insert: 'Diagnose the proxy health, August Brain, MCP, tools, and recent errors.'
+    },
+    {
+        id: 'cmd-help',
+        label: '/help',
+        title: 'Workbench help',
+        kind: 'command',
+        description: 'Explain the current Workbench session and approval gate.',
+        insert: 'Explain what you can do in this Workbench session and what requires approval.'
+    }
+];
+
+let slashCommandsCache = null;
+let slashActiveIndex = 0;
+let slashVisibleCommands = [];
+let slashQueryState = null;
+let slashRenderSeq = 0;
+let workbenchAgentsCache = null;
+let workbenchMainBusy = false;
+let workbenchBtwBusy = false;
+
+const WORKBENCH_TYPING_INTERVAL_MS = 16;
+
+function prefersReducedWorkbenchMotion() {
+    return typeof window !== 'undefined'
+        && typeof window.matchMedia === 'function'
+        && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+function getWorkbenchTypingChunk(fullLength, remaining) {
+    if (fullLength > 6000) return Math.min(remaining, 28);
+    if (fullLength > 1800) return Math.min(remaining, 14);
+    if (fullLength > 600) return Math.min(remaining, 7);
+    return Math.min(remaining, 3);
+}
+
+function applyTypingContent(target, text, markdown) {
+    if (markdown) target.innerHTML = renderMarkdown(text || '');
+    else target.textContent = text || '';
+}
+
+function finalizeTypingJob(job) {
+    if (!job || !job.target) return;
+    job.target.classList.remove('is-typing');
+    job.target._wbTypingJob = null;
+    job.target._wbTypingRendered = job.full.length;
+    applyTypingContent(job.target, job.full, job.markdown);
+    if (typeof job.onDone === 'function') job.onDone(job.target);
+}
+
+function runTypingJob(job) {
+    if (!job || !job.target?.isConnected) return;
+    const remaining = job.full.length - job.rendered;
+    if (remaining <= 0) {
+        finalizeTypingJob(job);
+        return;
+    }
+    job.rendered += getWorkbenchTypingChunk(job.full.length, remaining);
+    applyTypingContent(job.target, job.full.slice(0, job.rendered), job.markdown);
+    const messages = document.getElementById('workbenchMessages');
+    if (messages) messages.scrollTop = messages.scrollHeight;
+    job.timer = setTimeout(() => runTypingJob(job), WORKBENCH_TYPING_INTERVAL_MS);
+}
+
+function enqueueTypingText(target, text, options = {}) {
+    if (!target || text == null) return;
+    const chunk = String(text);
+    if (!chunk) return;
+    const markdown = options.markdown !== false;
+    if (prefersReducedWorkbenchMotion()) {
+        const fullText = (target._wbTypingFull || (markdown ? target.textContent : target.textContent) || '') + chunk;
+        target._wbTypingFull = fullText;
+        target._wbTypingRendered = fullText.length;
+        applyTypingContent(target, fullText, markdown);
+        if (typeof options.onDone === 'function') options.onDone(target);
+        return;
+    }
+    let job = target._wbTypingJob;
+    if (!job) {
+        job = {
+            target,
+            markdown,
+            full: target._wbTypingFull || '',
+            rendered: Number(target._wbTypingRendered || 0),
+            timer: null,
+            onDone: options.onDone || null
+        };
+        target._wbTypingJob = job;
+    }
+    job.markdown = markdown;
+    if (options.onDone) job.onDone = options.onDone;
+    job.full += chunk;
+    target._wbTypingFull = job.full;
+    target.classList.add('is-typing');
+    if (!job.timer) runTypingJob(job);
+}
+
+function invalidateWorkbenchSlashCommands() {
+    slashCommandsCache = null;
+}
+
+function parseWorkbenchInputCommand(text) {
+    const match = String(text || '').trim().match(/^\/([a-zA-Z][\w-]*)(?:\s+([\s\S]*))?$/);
+    if (!match) return null;
+    return { command: match[1].toLowerCase(), arg: String(match[2] || '').trim() };
+}
+
+function isBtwCommandText(text) {
+    return parseWorkbenchInputCommand(text)?.command === 'btw';
+}
+
+function isGoalCommandText(text) {
+    return parseWorkbenchInputCommand(text)?.command === 'goal';
 }
 
 /* Remove welcome screen on first interaction */
@@ -13,14 +204,15 @@ function removeWelcome() {
 }
 
 /* ── Flat-Text Message Renderer ── */
-function renderWorkbenchMessage(role, text, msgIndex) {
+function renderWorkbenchMessage(role, text, msgIndex, options = {}) {
     const messages = document.getElementById('workbenchMessages');
     if (!messages) return;
     removeWelcome();
     const isUser = role === 'user';
+    const shouldType = !isUser && options.typing !== false;
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const bodyHtml = isUser ? escapeHtml(text || '') : renderMarkdown(text || '');
-    const contentClass = isUser ? 'whitespace-pre-wrap' : 'md-content';
+    const bodyHtml = shouldType ? '' : (isUser ? escapeHtml(text || '') : renderMarkdown(text || ''));
+    const contentClass = isUser ? 'whitespace-pre-wrap' : `md-content${shouldType ? ' wb-typing-output' : ''}`;
     const idx = msgIndex != null ? msgIndex : Date.now();
     const roleLabel = isUser ? 'You' : '✦ August';
     const roleClass = isUser ? '' : 'is-assistant';
@@ -42,7 +234,20 @@ function renderWorkbenchMessage(role, text, msgIndex) {
     const last = messages.lastElementChild;
     if (last) {
         const body = last.querySelector('.wb-msg-body > .md-content');
-        if (body) { highlightCodeBlocks(body); attachCopyButtons(body); }
+        if (body) {
+            if (shouldType) {
+                enqueueTypingText(body, text || '', {
+                    markdown: true,
+                    onDone: target => {
+                        highlightCodeBlocks(target);
+                        attachCopyButtons(target);
+                    }
+                });
+            } else {
+                highlightCodeBlocks(body);
+                attachCopyButtons(body);
+            }
+        }
     }
     messages.scrollTop = messages.scrollHeight;
 }
@@ -54,6 +259,7 @@ function renderWorkbenchPlan() {
     if (!planEl || !approveBtn || !badge) return;
     const plan = workbenchSession?.plan;
     const approved = workbenchSession?.approved === true;
+    const mutationCount = Number(workbenchSession?.mutationCount || 0);
     approveBtn.disabled = !plan || approved;
     approveBtn.classList.toggle('opacity-50', !plan || approved);
     badge.textContent = approved ? 'Approved' : (plan ? 'Plan pending' : 'All tools ready');
@@ -82,24 +288,131 @@ function renderWorkbenchPlan() {
         Array.isArray(plan.verification) && plan.verification.length
             ? '<div class="text-[11px] font-bold uppercase tracking-wider opacity-60 mt-3 mb-1.5">Verification</div><ul class="list-disc pl-4 space-y-0.5">' + plan.verification.map(v => `<li>${escapeHtml(v)}</li>`).join('') + '</ul>'
             : '',
-        `<div class="mt-3 pt-2 border-t border-dashed border-slate-300 dark:border-slate-700 text-[11px] ${approved ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'} font-semibold">${approved ? 'Approved — proxy system mutations unlocked' : 'Only proxy system writes are blocked'}</div>`
+        `<div class="mt-3 pt-2 border-t border-dashed border-slate-300 dark:border-slate-700 text-[11px] ${approved ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'} font-semibold">${approved ? 'Approved - planned mutations unlocked' : 'All mutations are blocked until approval'}</div>`,
+        mutationCount ? `<div class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">Mutation audit: ${mutationCount} recorded action${mutationCount === 1 ? '' : 's'}</div>` : ''
     ].filter(Boolean).join('\n');
+}
+
+function renderWorkbenchGoal(data) {
+    const goal = data?.goal !== undefined ? data.goal : workbenchSession?.goal;
+    const lastGoal = data?.lastGoal !== undefined ? data.lastGoal : workbenchSession?.lastGoal;
+    const badge = document.getElementById('workbenchGoalBadge');
+    const drawer = document.getElementById('workbenchGoalPanel');
+    if (badge) {
+        if (goal) {
+            badge.classList.remove('hidden');
+            badge.innerHTML = `<span class="wb-header-dot"></span>Goal: active`;
+            badge.title = goal.condition || 'Active goal';
+        } else if (lastGoal?.status === 'achieved') {
+            badge.classList.remove('hidden');
+            badge.innerHTML = `<span class="wb-header-dot"></span>Goal: done`;
+            badge.title = lastGoal.condition || 'Last goal achieved';
+        } else {
+            badge.classList.add('hidden');
+            badge.title = '';
+        }
+    }
+    if (drawer) {
+        if (goal) {
+            drawer.innerHTML = `
+                <div class="wb-goal-state is-active">
+                    <div class="wb-goal-title">Active goal</div>
+                    <div class="wb-goal-condition">${escapeHtml(goal.condition || '')}</div>
+                    <div class="wb-goal-meta">${Number(goal.turns || 0)} evaluation${Number(goal.turns || 0) === 1 ? '' : 's'} · ${escapeHtml(goal.lastReason || 'Running')}</div>
+                    <button type="button" class="minimal-button rounded-xl px-3 py-2 text-xs font-semibold" onclick="clearWorkbenchGoalUI()">Clear goal</button>
+                </div>
+            `;
+        } else {
+            drawer.innerHTML = `
+                <div class="wb-goal-state">
+                    <div class="wb-goal-title">${lastGoal ? `Last goal: ${escapeHtml(lastGoal.status || 'done')}` : 'No active goal'}</div>
+                    <div class="wb-goal-condition">${lastGoal ? escapeHtml(lastGoal.condition || '') : 'Use /goal to keep August working until a condition is met.'}</div>
+                    ${lastGoal?.lastReason ? `<div class="wb-goal-meta">${escapeHtml(lastGoal.lastReason)}</div>` : ''}
+                </div>
+            `;
+        }
+    }
+}
+
+function renderWorkbenchAgentBadge(data) {
+    const badge = document.getElementById('workbenchAgentBadge');
+    if (!badge) return;
+    const activeId = workbenchSession?.agentId || data?.activeAgentId || document.getElementById('workbenchAgent')?.value || 'build';
+    const agent = (data?.agents || []).find(item => item.id === activeId);
+    badge.innerHTML = `<span class="wb-header-dot"></span>Agent: ${escapeHtml(agent?.id || activeId)}`;
+    badge.title = agent?.role || 'Active Workbench agent';
+}
+
+function formatAgentPermissions(permissions = {}) {
+    return Object.entries(permissions)
+        .map(([key, value]) => `<span class="wb-agent-perm is-${escapeHtml(value)}">${escapeHtml(key)}:${escapeHtml(value)}</span>`)
+        .join('');
+}
+
+function populateWorkbenchAgentSelect(data) {
+    const select = document.getElementById('workbenchAgent');
+    if (!select || !Array.isArray(data?.agents)) return;
+    const current = select.value || workbenchSession?.agentId || 'build';
+    select.innerHTML = data.agents
+        .filter(agent => agent.mode === 'primary')
+        .map(agent => `<option value="${escapeHtml(agent.id)}">${escapeHtml(agent.id)}</option>`)
+        .join('');
+    select.value = data.agents.some(agent => agent.id === current && agent.mode === 'primary') ? current : 'build';
+}
+
+function renderWorkbenchAgentsUI(data) {
+    const el = document.getElementById('workbenchAgentRegistry');
+    if (!el || !data) return;
+    const activeId = workbenchSession?.agentId || data.activeAgentId || 'build';
+    const agents = Array.isArray(data.agents) ? data.agents : [];
+    el.innerHTML = agents.map(agent => `
+        <div class="wb-agent-card ${agent.id === activeId ? 'is-active' : ''}">
+            <div class="wb-agent-row">
+                <span class="wb-agent-name">${escapeHtml(agent.id)}</span>
+                <span class="wb-agent-mode">${escapeHtml(agent.mode || 'agent')}</span>
+            </div>
+            <div class="wb-agent-role">${escapeHtml(agent.role || '')}</div>
+            <div class="wb-agent-goal">${escapeHtml(agent.goal || '')}</div>
+            <div class="wb-agent-perms">${formatAgentPermissions(agent.effectivePermissions || agent.permissions || {})}</div>
+        </div>
+    `).join('') || '<div class="text-xs text-slate-500">No agents registered.</div>';
+}
+
+async function loadWorkbenchAgentsUI(force = false) {
+    if (workbenchAgentsCache && !force) {
+        populateWorkbenchAgentSelect(workbenchAgentsCache);
+        renderWorkbenchAgentBadge(workbenchAgentsCache);
+        renderWorkbenchAgentsUI(workbenchAgentsCache);
+        return workbenchAgentsCache;
+    }
+    const active = workbenchSession?.agentId || document.getElementById('workbenchAgent')?.value || 'build';
+    const data = await fetchJsonOrNull(`/ui/workbench/agents?active=${encodeURIComponent(active)}`);
+    if (!data) return null;
+    workbenchAgentsCache = data;
+    populateWorkbenchAgentSelect(data);
+    renderWorkbenchAgentBadge(data);
+    renderWorkbenchAgentsUI(data);
+    return data;
 }
 
 async function ensureWorkbenchSession() {
     if (workbenchSession) {
         renderWorkbenchPlan();
+        renderWorkbenchGoal();
+        loadWorkbenchAgentsUI().catch(() => {});
         return workbenchSession;
     }
     const provider = document.getElementById('workbenchProvider')?.value || 'claude';
+    const agentId = document.getElementById('workbenchAgent')?.value || 'build';
     const res = await fetch('/ui/workbench/session', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider })
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider, agentId })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Could not create Workbench session');
     workbenchSession = data;
-    removeWelcome();
     renderWorkbenchPlan();
+    renderWorkbenchGoal();
+    loadWorkbenchAgentsUI(true).catch(() => {});
     setWorkbenchStatus('Ready', 'bg-emerald-400');
     return workbenchSession;
 }
@@ -108,6 +421,60 @@ function setWorkbenchStatus(html, dotColor) {
     const inner = document.getElementById('workbenchStatusInner');
     if (!inner) return;
     inner.innerHTML = dotColor ? `<span class="w-1.5 h-1.5 rounded-full ${dotColor}"></span>${html}` : html;
+}
+
+function renderWorkbenchDiagnostics(data) {
+    const el = document.getElementById('workbenchDiagnostics');
+    if (!el) return;
+    const checks = (data.checks || []).slice(0, 6);
+    const counts = data.counts || {};
+    const statusClass = data.summary?.overall === 'error'
+        ? 'text-red-600 dark:text-red-300'
+        : data.summary?.overall === 'warn'
+            ? 'text-amber-600 dark:text-amber-300'
+            : 'text-emerald-600 dark:text-emerald-300';
+    el.classList.remove('hidden');
+    el.innerHTML = `
+        <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div>
+                <div class="text-[11px] font-bold uppercase tracking-wider ${statusClass}">Proxy diagnostics: ${escapeHtml(data.summary?.overall || 'unknown')}</div>
+                <div class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                    Vector ${counts.vectorEntries || 0} · Semantic ${counts.semanticFacts || 0} · Core checkpoints ${counts.coreCheckpoints || 0} · Supermemory ${data.supermemory?.configured ? 'configured' : 'not configured'}
+                </div>
+            </div>
+            <button onclick="document.getElementById('workbenchDiagnostics')?.classList.add('hidden')" class="minimal-button rounded-xl px-3 py-1.5 text-[11px] font-semibold">Hide</button>
+        </div>
+        <div class="mt-3 grid gap-2 md:grid-cols-2">
+            ${checks.map(check => `
+                <div class="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
+                    <div class="flex items-center justify-between gap-2">
+                        <span class="font-semibold">${escapeHtml(check.label)}</span>
+                        <span class="rounded-full px-2 py-0.5 text-[10px] font-bold ${check.status === 'ok' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300' : check.status === 'error' ? 'bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300' : 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300'}">${escapeHtml(check.status)}</span>
+                    </div>
+                    <div class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">${escapeHtml(check.detail || '')}</div>
+                </div>
+            `).join('')}
+        </div>
+    `;
+}
+
+async function loadWorkbenchDiagnosticsUI() {
+    const el = document.getElementById('workbenchDiagnostics');
+    if (el) {
+        el.classList.remove('hidden');
+        el.textContent = 'Checking proxy diagnostics...';
+    }
+    try {
+        const res = await fetch('/ui/brain/diagnostics', { cache: 'no-store' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Diagnostics failed');
+        renderWorkbenchDiagnostics(data);
+    } catch (e) {
+        if (el) {
+            el.classList.remove('hidden');
+            el.textContent = e.message;
+        }
+    }
 }
 
 function toggleWorkbenchDrawer() {
@@ -123,7 +490,257 @@ function autoResizeTextarea(el) {
     const sendBtn = document.getElementById('workbenchSendBtn');
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 180) + 'px';
-    if (sendBtn) sendBtn.disabled = !el.value.trim();
+    if (sendBtn) {
+        const value = el.value.trim();
+        sendBtn.disabled = !value || (workbenchMainBusy && !isBtwCommandText(value) && !/^\/goal\s+(clear|stop|off|reset|none|cancel)$/i.test(value));
+    }
+    syncSlashPalette(el);
+}
+
+function handleWorkbenchInputInput(el) {
+    autoResizeTextarea(el);
+}
+
+function handleWorkbenchInputKeydown(event) {
+    const input = event.currentTarget || event.target;
+    if (isSlashPaletteOpen()) {
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            moveSlashSelection(1);
+            return;
+        }
+        if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            moveSlashSelection(-1);
+            return;
+        }
+        if (event.key === 'Enter' || event.key === 'Tab') {
+            event.preventDefault();
+            commitSlashSelection(input);
+            return;
+        }
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            closeSlashPalette();
+            return;
+        }
+    }
+    if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        closeSlashPalette();
+        sendWorkbenchMessageUI();
+    }
+}
+
+function getSlashPalette() {
+    return document.getElementById('workbenchSlashPalette');
+}
+
+function isSlashPaletteOpen() {
+    const palette = getSlashPalette();
+    return !!palette && !palette.classList.contains('hidden');
+}
+
+function closeSlashPalette() {
+    const palette = getSlashPalette();
+    slashQueryState = null;
+    slashVisibleCommands = [];
+    slashActiveIndex = 0;
+    if (!palette) return;
+    palette.classList.add('hidden');
+    palette.innerHTML = '';
+}
+
+function getSlashQueryState(input) {
+    if (!input) return null;
+    const cursor = typeof input.selectionStart === 'number' ? input.selectionStart : input.value.length;
+    const beforeCursor = input.value.slice(0, cursor);
+    const match = beforeCursor.match(/(?:^|\s)\/([^\s/]*)$/);
+    if (!match) return null;
+    const token = '/' + match[1];
+    return {
+        query: match[1].toLowerCase(),
+        start: beforeCursor.length - token.length,
+        end: cursor
+    };
+}
+
+function syncSlashPalette(input) {
+    const state = getSlashQueryState(input);
+    if (!state) {
+        closeSlashPalette();
+        return;
+    }
+    const seq = ++slashRenderSeq;
+    loadSlashCommands()
+        .then(commands => {
+            if (seq !== slashRenderSeq) return;
+            renderSlashPalette(state, commands);
+        })
+        .catch(() => {
+            if (seq !== slashRenderSeq) return;
+            renderSlashPalette(state, WORKBENCH_BASE_SLASH_COMMANDS);
+        });
+}
+
+async function loadSlashCommands() {
+    if (slashCommandsCache) return slashCommandsCache;
+    const [skillsData, capabilitiesData, agentsData] = await Promise.all([
+        fetchJsonOrNull('/ui/skills'),
+        fetchJsonOrNull('/ui/workbench/capabilities'),
+        fetchJsonOrNull('/ui/workbench/agents')
+    ]);
+    const commands = [...WORKBENCH_BASE_SLASH_COMMANDS];
+
+    const skills = Array.isArray(skillsData?.skills) ? skillsData.skills : [];
+    skills
+        .filter(skill => skill && skill.enabled !== false && skill.name)
+        .forEach(skill => commands.push({
+            id: `skill-${skill.name}`,
+            label: `/${skill.name}`,
+            title: skill.name,
+            kind: 'skill',
+            description: skill.description || skill.trigger || 'Available skill',
+            insert: `Use the "${skill.name}" skill for: `
+        }));
+
+    const groups = capabilitiesData?.groups && typeof capabilitiesData.groups === 'object'
+        ? capabilitiesData.groups
+        : {};
+    Object.entries(groups).forEach(([group, tools]) => {
+        (Array.isArray(tools) ? tools : []).forEach(tool => {
+            if (!tool?.name) return;
+            commands.push({
+                id: `tool-${tool.name}`,
+                label: `/${tool.name}`,
+                title: tool.name,
+                kind: tool.mutating ? 'tool + approval' : 'tool',
+                group,
+                description: trimSlashDescription(tool.description || group || 'Workbench tool', tool.mutating),
+                insert: `Use the ${tool.name} tool${tool.mutating ? ' after an approved plan' : ''} with: `
+            });
+        });
+    });
+
+    const agents = Array.isArray(agentsData?.agents) ? agentsData.agents : [];
+    agents.forEach(agent => commands.push({
+        id: `agent-${agent.id}`,
+        label: `/agent:${agent.id}`,
+        title: `${agent.id} agent`,
+        kind: agent.mode || 'agent',
+        description: agent.role || agent.goal || 'Workbench agent',
+        insert: `Use the "${agent.id}" Workbench agent role for this request: `
+    }));
+
+    const deduped = [];
+    const seen = new Set();
+    commands.forEach(command => {
+        const key = command.id || `${command.kind}:${command.label}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        deduped.push(command);
+    });
+    slashCommandsCache = deduped;
+    return slashCommandsCache;
+}
+
+async function fetchJsonOrNull(url) {
+    try {
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) return null;
+        return await res.json();
+    } catch (e) {
+        return null;
+    }
+}
+
+function trimSlashDescription(text, mutating) {
+    const clean = String(text || '').replace(/\s+/g, ' ').trim();
+    const prefix = mutating ? 'Requires approved plan. ' : '';
+    return prefix + (clean.length > 120 ? clean.slice(0, 117) + '...' : clean);
+}
+
+function renderSlashPalette(state, commands) {
+    const palette = getSlashPalette();
+    if (!palette) return;
+    slashQueryState = state;
+    const query = state.query || '';
+    const filtered = filterSlashCommands(commands, query).slice(0, 80);
+    slashVisibleCommands = filtered;
+    slashActiveIndex = Math.min(slashActiveIndex, Math.max(filtered.length - 1, 0));
+
+    if (!filtered.length) {
+        palette.innerHTML = '<div class="wb-slash-empty">No matching commands</div>';
+        palette.classList.remove('hidden');
+        return;
+    }
+
+    palette.innerHTML = filtered.map((command, index) => `
+        <button type="button" class="wb-slash-item ${index === slashActiveIndex ? 'is-active' : ''}" role="option" aria-selected="${index === slashActiveIndex ? 'true' : 'false'}" onmousedown="event.preventDefault()" onclick="selectSlashCommand(${index})">
+            <span class="wb-slash-main">
+                <span class="wb-slash-label">${escapeHtml(command.label)}</span>
+                <span class="wb-slash-title">${escapeHtml(command.title || command.label)}</span>
+            </span>
+            <span class="wb-slash-meta">${escapeHtml(command.kind || 'command')}</span>
+            <span class="wb-slash-desc">${escapeHtml(command.description || '')}</span>
+        </button>
+    `).join('');
+    palette.classList.remove('hidden');
+}
+
+function filterSlashCommands(commands, query) {
+    if (!query) return commands;
+    return commands.filter(command => {
+        const haystack = [
+            command.label,
+            command.title,
+            command.kind,
+            command.group,
+            command.description
+        ].filter(Boolean).join(' ').toLowerCase();
+        return haystack.includes(query);
+    });
+}
+
+function moveSlashSelection(delta) {
+    if (!slashVisibleCommands.length) return;
+    slashActiveIndex = (slashActiveIndex + delta + slashVisibleCommands.length) % slashVisibleCommands.length;
+    paintSlashSelection();
+}
+
+function paintSlashSelection() {
+    const palette = getSlashPalette();
+    if (!palette) return;
+    Array.from(palette.querySelectorAll('.wb-slash-item')).forEach((item, index) => {
+        const active = index === slashActiveIndex;
+        item.classList.toggle('is-active', active);
+        item.setAttribute('aria-selected', active ? 'true' : 'false');
+        if (active) item.scrollIntoView({ block: 'nearest' });
+    });
+}
+
+function selectSlashCommand(index) {
+    slashActiveIndex = index;
+    commitSlashSelection(document.getElementById('workbenchInput'));
+}
+
+function commitSlashSelection(input) {
+    const command = slashVisibleCommands[slashActiveIndex];
+    if (!command || !input) return false;
+    const state = slashQueryState || getSlashQueryState(input);
+    if (!state) return false;
+    const insert = command.insert || command.title || command.label;
+    const before = input.value.slice(0, state.start);
+    const after = input.value.slice(state.end).replace(/^\s+/, '');
+    const spacerBefore = before && !/\s$/.test(before) ? ' ' : '';
+    const spacerAfter = after && !insert.endsWith(' ') ? ' ' : '';
+    input.value = before + spacerBefore + insert + spacerAfter + after;
+    const cursor = (before + spacerBefore + insert).length;
+    input.focus();
+    input.setSelectionRange(cursor, cursor);
+    closeSlashPalette();
+    autoResizeTextarea(input);
+    return true;
 }
 
 function copyMessage(btn) {
@@ -150,7 +767,7 @@ function showTypingIndicator() {
     inner.innerHTML = '<span class="typing-dots"><span></span><span></span><span></span></span>';
 }
 
-/* ── Thinking with Spinner + Timer (Claude-style) ── */
+/* ── Inline Thinking + Tool Activity ── */
 let thinkContainer = null;
 let thinkStartTime = null;
 let thinkTimerInterval = null;
@@ -162,12 +779,10 @@ function ensureThinkContainer() {
     removeWelcome();
     thinkStartTime = Date.now();
     const div = document.createElement('div');
-    div.className = 'think-container';
-    div.innerHTML = '<div class="think-toggle"><span class="think-spinner"></span><span class="think-label">Thinking\u2026 <span class="think-timer">0.0s</span></span><span class="think-arrow">\u25B6</span></div><div class="think-body"></div>';
-    div.querySelector('.think-toggle').onclick = function () { this.parentElement.classList.toggle('think-open'); };
+    div.className = 'think-container is-running';
+    div.innerHTML = '<button type="button" class="think-toggle" aria-expanded="false" onclick="toggleInlineDisclosure(this)"><span class="inline-caret">›</span><span class="think-label">Thinking <span class="think-timer">0.0s</span></span></button><div class="think-body"></div>';
     messages.appendChild(div);
     thinkContainer = div;
-    // Start timer
     const timerEl = div.querySelector('.think-timer');
     thinkTimerInterval = setInterval(() => {
         if (timerEl && thinkStartTime) {
@@ -181,15 +796,13 @@ function ensureThinkContainer() {
 function renderThinkingDelta(text) {
     if (!ensureThinkContainer()) return;
     const body = thinkContainer.querySelector('.think-body');
-    body.textContent += text;
+    enqueueTypingText(body, text || '', { markdown: false });
 }
 
 function resetThinkLine() {
     if (thinkTimerInterval) { clearInterval(thinkTimerInterval); thinkTimerInterval = null; }
     if (thinkContainer && thinkContainer.isConnected) {
-        // Replace spinner with done icon, finalize timer
-        const spinner = thinkContainer.querySelector('.think-spinner');
-        if (spinner) { spinner.outerHTML = '<span class="think-done-icon">\u25C9</span>'; }
+        thinkContainer.classList.remove('is-running');
         const label = thinkContainer.querySelector('.think-label');
         if (label && thinkStartTime) {
             const elapsed = ((Date.now() - thinkStartTime) / 1000).toFixed(1);
@@ -200,17 +813,39 @@ function resetThinkLine() {
     thinkStartTime = null;
 }
 
-/* ── Tool Lines (Codex-style accent blocks) ── */
+function toggleInlineDisclosure(btn) {
+    const host = btn?.closest?.('.think-container, .tool-line');
+    if (!host) return;
+    const isOpen = !host.classList.contains('is-open');
+    host.classList.toggle('is-open', isOpen);
+    host.classList.toggle('think-open', isOpen);
+    btn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+}
+
 function renderToolLine(id, name, input) {
     resetThinkLine();
     const messages = document.getElementById('workbenchMessages');
     if (!messages) return;
     removeWelcome();
-    const inputSummary = typeof input === 'string' ? input : (input && typeof input === 'object' ? (input.path || input.command || input.query || JSON.stringify(input).slice(0, 80)) : '');
+    const presentation = getToolPresentation(name);
+    const inputSummary = summarizeToolInput(input);
     const div = document.createElement('div');
-    div.className = 'tool-line';
+    div.className = `tool-line tool-line-${presentation.kind}`;
     div.dataset.tid = id;
-    div.innerHTML = `<div class="tool-line-header"><span class="tool-icon">\u26A1</span><span class="tool-name">${escapeHtml(name)}</span><span class="tool-status running"><span class="tool-status-dot running"></span>running\u2026</span></div>${inputSummary ? `<div class="tool-input-summary">${escapeHtml(inputSummary)}</div>` : ''}`;
+    div.dataset.toolName = name;
+    div.innerHTML = `
+        <button type="button" class="tool-line-toggle" aria-expanded="false" onclick="toggleInlineDisclosure(this)">
+            <span class="inline-caret">›</span>
+            <span class="tool-action">${escapeHtml(presentation.action)}</span>
+            <span class="tool-name">${escapeHtml(name)}</span>
+            <span class="tool-input-summary">${inputSummary ? escapeHtml(inputSummary) : ''}</span>
+            <span class="tool-status running"><span class="tool-status-dot running"></span>running</span>
+        </button>
+        <div class="tool-line-detail">
+            ${inputSummary ? `<div class="tool-line-input">Input: ${escapeHtml(inputSummary)}</div>` : ''}
+            <div class="tool-result-preview hidden"></div>
+        </div>
+    `;
     messages.appendChild(div);
     messages.scrollTop = messages.scrollHeight;
 }
@@ -222,12 +857,91 @@ function updateToolLine(id, content, isError) {
     const dot = el.querySelector('.tool-status-dot');
     if (isError) {
         el.classList.add('is-error');
-        if (status) { status.className = 'tool-status error'; status.innerHTML = '<span class="tool-status-dot"></span>\u2717 error'; }
+        if (status) { status.className = 'tool-status error'; status.innerHTML = '<span class="tool-status-dot"></span>error'; }
     } else {
         el.classList.add('is-done');
-        if (status) { status.className = 'tool-status done'; status.innerHTML = '<span class="tool-status-dot"></span>\u2713 done'; }
+        if (status) { status.className = 'tool-status done'; status.innerHTML = '<span class="tool-status-dot"></span>done'; }
     }
     if (dot) dot.classList.remove('running');
+    const preview = el.querySelector('.tool-result-preview');
+    if (preview) {
+        const summary = summarizeToolResult(el.querySelector('.tool-name')?.textContent || '', content, isError);
+        if (summary) {
+            preview.classList.remove('hidden');
+            preview.innerHTML = summary;
+        }
+    }
+}
+
+function getToolPresentation(name) {
+    const lower = String(name || '').toLowerCase();
+    if (lower.includes('skill') || lower.includes('capability') || lower.includes('import')) {
+        return {
+            kind: 'skill',
+            action: lower.includes('preview') || lower.includes('find') ? 'Inspecting skill' : 'Using skill'
+        };
+    }
+    if (lower.includes('run_command') || lower.includes('bash') || lower.includes('write_file') || lower.includes('replace_text')) {
+        return {
+            kind: 'code',
+            action: lower.includes('run') || lower.includes('bash') ? 'Running code' : 'Changing files'
+        };
+    }
+    if (lower.includes('web') || lower.includes('fetch') || lower.includes('search')) {
+        return {
+            kind: 'web',
+            action: 'Searching'
+        };
+    }
+    if (lower.includes('read') || lower.includes('list') || lower.includes('diagnose') || lower.includes('activity')) {
+        return {
+            kind: 'inspect',
+            action: 'Inspecting'
+        };
+    }
+    if (lower.startsWith('computer_')) {
+        return {
+            kind: 'computer',
+            action: 'Using computer'
+        };
+    }
+    return {
+        kind: 'generic',
+        action: 'Using tool'
+    };
+}
+
+function summarizeToolInput(input) {
+    if (typeof input === 'string') return input.slice(0, 160);
+    if (!input || typeof input !== 'object') return '';
+    return input.url || input.path || input.command || input.query || input.name || JSON.stringify(input).slice(0, 160);
+}
+
+function summarizeToolResult(toolName, content, isError) {
+    const text = typeof content === 'string' ? content : JSON.stringify(content || '');
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch (e) {}
+    if (isError) return `<div class="tool-result-title">Needs attention</div><pre>${escapeHtml(text.slice(0, 600))}</pre>`;
+    if (parsed && typeof parsed === 'object') {
+        const skills = parsed.skills || parsed.preview?.skills || parsed.candidates?.flatMap(item => item.preview?.skills || []) || [];
+        const mcpServers = parsed.mcpServers || parsed.preview?.mcpServers || [];
+        const candidates = parsed.candidates || [];
+        if (skills.length || mcpServers.length || candidates.length) {
+            const lines = [];
+            if (candidates.length) lines.push(`${candidates.length} candidate${candidates.length === 1 ? '' : 's'} found`);
+            if (skills.length) lines.push(`Skills: ${skills.map(item => item.name).filter(Boolean).join(', ')}`);
+            if (mcpServers.length) lines.push(`MCP: ${mcpServers.map(item => item.name).filter(Boolean).join(', ')}`);
+            if (parsed.availability?.clients) lines.push(parsed.availability.clients);
+            return `<div class="tool-result-title">Skill result</div><p>${escapeHtml(lines.filter(Boolean).join(' | '))}</p>`;
+        }
+        if (parsed.stdout || parsed.stderr || parsed.exitCode !== undefined) {
+            const output = [parsed.stdout, parsed.stderr].filter(Boolean).join('\n').trim();
+            return `<div class="tool-result-title">Command output</div><pre>${escapeHtml((output || `Exit code ${parsed.exitCode}`).slice(0, 800))}</pre>`;
+        }
+    }
+    if (!text.trim()) return '';
+    const label = String(toolName || '').toLowerCase().includes('load_skill') ? 'Skill loaded' : 'Result';
+    return `<div class="tool-result-title">${escapeHtml(label)}</div><pre>${escapeHtml(text.slice(0, 800))}</pre>`;
 }
 
 /* ── SSE Event Handler ── */
@@ -243,9 +957,20 @@ function handleSSEEvent(event, data) {
         case 'session':
             workbenchSession = data;
             renderWorkbenchPlan();
+            renderWorkbenchGoal();
+            loadWorkbenchAgentsUI(true).catch(() => {});
             if (workbenchSession.approved) setWorkbenchStatus('Plan approved', 'bg-emerald-400');
             else if (workbenchSession.plan) setWorkbenchStatus('Plan pending', 'bg-amber-400');
             else setWorkbenchStatus('Ready', 'bg-emerald-400');
+            break;
+        case 'goal':
+            renderWorkbenchGoal(data);
+            if (data?.event === 'started') setWorkbenchStatus('Goal running', 'bg-violet-400');
+            else if (data?.event === 'achieved') setWorkbenchStatus('Goal reached', 'bg-emerald-400');
+            else if (data?.event === 'cleared') setWorkbenchStatus('Goal cleared', 'bg-slate-400');
+            break;
+        case 'btw':
+            appendBtwMessage('assistant', data.answer || '');
             break;
         case 'error':
             resetThinkLine();
@@ -277,14 +1002,149 @@ async function readSSEStream(reader) {
     if (evt && dat) { try { handleSSEEvent(evt, JSON.parse(dat)); } catch (e) {} }
 }
 
+function openBtwPanel() {
+    const panel = document.getElementById('workbenchBtwPanel');
+    if (panel) panel.classList.remove('hidden');
+    const input = document.getElementById('workbenchBtwInput');
+    if (input) input.focus();
+}
+
+function closeBtwPanel() {
+    const panel = document.getElementById('workbenchBtwPanel');
+    if (panel) panel.classList.add('hidden');
+}
+
+function appendBtwMessage(role, text) {
+    const log = document.getElementById('workbenchBtwMessages');
+    if (!log) return;
+    log.querySelector('.wb-btw-empty')?.remove();
+    const isUser = role === 'user';
+    const div = document.createElement('div');
+    div.className = `wb-btw-message ${isUser ? 'is-user' : 'is-assistant'}`;
+    div.innerHTML = `
+        <div class="wb-btw-role">${isUser ? 'You' : 'August'}</div>
+        <div class="wb-btw-body ${isUser ? '' : 'md-content wb-typing-output'}"></div>
+    `;
+    log.appendChild(div);
+    const body = div.querySelector('.wb-btw-body');
+    if (isUser) {
+        body.textContent = text || '';
+    } else {
+        enqueueTypingText(body, text || '', {
+            markdown: true,
+            onDone: target => {
+                highlightCodeBlocks(target);
+                attachCopyButtons(target);
+            }
+        });
+    }
+    log.scrollTop = log.scrollHeight;
+}
+
+async function sendWorkbenchBtwQuestion(question) {
+    const input = document.getElementById('workbenchBtwInput');
+    const sendBtn = document.getElementById('workbenchBtwSendBtn');
+    const clean = String(question || input?.value || '').trim();
+    if (!clean || workbenchBtwBusy) return;
+    await ensureWorkbenchSession();
+    openBtwPanel();
+    if (input) input.value = '';
+    appendBtwMessage('user', clean);
+    workbenchBtwBusy = true;
+    if (sendBtn) sendBtn.disabled = true;
+    try {
+        const res = await fetch('/ui/workbench/btw', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                sessionId: workbenchSession.id,
+                provider: document.getElementById('workbenchProvider')?.value || 'claude',
+                agentId: document.getElementById('workbenchAgent')?.value || workbenchSession.agentId || 'build',
+                question: clean
+            })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'BTW failed');
+        appendBtwMessage('assistant', data.answer || '(no response)');
+    } catch (e) {
+        appendBtwMessage('assistant', 'Error: ' + e.message);
+    } finally {
+        workbenchBtwBusy = false;
+        if (sendBtn) sendBtn.disabled = false;
+    }
+}
+
+function handleBtwInputKeydown(event) {
+    if (event.key === 'Escape') {
+        closeBtwPanel();
+        return;
+    }
+    if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        sendWorkbenchBtwQuestion();
+    }
+}
+
+async function handleGoalSideCommand(message) {
+    const parsed = parseWorkbenchInputCommand(message);
+    if (parsed?.command !== 'goal') return false;
+    const lower = parsed.arg.toLowerCase();
+    if (!/^(clear|stop|off|reset|none|cancel)$/.test(lower)) return false;
+    await ensureWorkbenchSession();
+    const res = await fetch('/ui/workbench/goal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: workbenchSession.id, action: 'clear' })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Could not clear goal');
+    workbenchSession = data.session || workbenchSession;
+    renderWorkbenchGoal(data);
+    setWorkbenchStatus('Goal cleared', 'bg-slate-400');
+    renderWorkbenchMessage('assistant', 'Goal cleared.');
+    return true;
+}
+
+async function clearWorkbenchGoalUI() {
+    await handleGoalSideCommand('/goal clear');
+}
+
 async function sendWorkbenchMessageUI() {
     const input = document.getElementById('workbenchInput');
     const sendBtn = document.getElementById('workbenchSendBtn');
     const message = input?.value.trim();
     if (!message) return;
     await ensureWorkbenchSession();
+    const parsed = parseWorkbenchInputCommand(message);
+    if (parsed?.command === 'btw') {
+        input.value = '';
+        input.style.height = 'auto';
+        openBtwPanel();
+        await sendWorkbenchBtwQuestion(parsed.arg);
+        if (sendBtn) sendBtn.disabled = true;
+        return;
+    }
+    if (parsed?.command === 'goal' && workbenchMainBusy) {
+        try {
+            const handled = await handleGoalSideCommand(message);
+            if (handled) {
+                input.value = '';
+                input.style.height = 'auto';
+                if (sendBtn) sendBtn.disabled = true;
+                return;
+            }
+        } catch (e) {
+            renderWorkbenchMessage('assistant', e.message);
+            return;
+        }
+    }
+    if (workbenchMainBusy) {
+        showStatus('Workbench is still running. Use /btw for an aside or /goal clear to stop the active goal.', 'bg-amber-600 text-white');
+        return;
+    }
     input.value = '';
     input.style.height = 'auto';
+    workbenchMainBusy = true;
     if (sendBtn) sendBtn.disabled = true;
     renderWorkbenchMessage('user', message);
     setWorkbenchStatus('Working\u2026', 'bg-amber-400');
@@ -294,6 +1154,7 @@ async function sendWorkbenchMessageUI() {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
                 sessionId: workbenchSession.id,
                 provider: document.getElementById('workbenchProvider')?.value || 'claude',
+                agentId: document.getElementById('workbenchAgent')?.value || workbenchSession.agentId || 'build',
                 message
             })
         });
@@ -310,7 +1171,8 @@ async function sendWorkbenchMessageUI() {
         renderWorkbenchMessage('assistant', e.message);
         setWorkbenchStatus('Error.', 'bg-red-400');
     } finally {
-        if (sendBtn) sendBtn.disabled = false;
+        workbenchMainBusy = false;
+        if (input) autoResizeTextarea(input);
     }
 }
 
@@ -325,7 +1187,9 @@ async function approveWorkbenchPlanUI() {
         if (!res.ok) throw new Error(data.error || 'Could not approve plan');
         workbenchSession = data;
         renderWorkbenchPlan();
-        renderWorkbenchMessage('assistant', 'Plan approved. Proxy system mutations are now unlocked. Send a follow-up message such as "implement the approved plan" to let the agent proceed.');
+        renderWorkbenchGoal();
+        loadWorkbenchAgentsUI(true).catch(() => {});
+        renderWorkbenchMessage('assistant', 'Plan approved. Planned mutations are now unlocked. Send a follow-up message such as "implement the approved plan" to let the agent proceed.');
         showStatus('Workbench plan approved', 'bg-emerald-600 text-white');
     } catch (e) { showStatus(e.message, 'bg-red-600 text-white'); }
 }
@@ -333,9 +1197,10 @@ async function approveWorkbenchPlanUI() {
 async function resetWorkbenchUI() {
     const previousId = workbenchSession?.id;
     const provider = document.getElementById('workbenchProvider')?.value || 'claude';
+    const agentId = document.getElementById('workbenchAgent')?.value || 'build';
     const res = await fetch('/ui/workbench/reset', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: previousId, provider })
+        body: JSON.stringify({ sessionId: previousId, provider, agentId })
     });
     const data = await res.json();
     if (!res.ok) { showStatus(data.error || 'Could not reset Workbench', 'bg-red-600 text-white'); return; }
@@ -345,15 +1210,18 @@ async function resetWorkbenchUI() {
         messages.innerHTML = `<div class="wb-welcome" id="wbWelcome">
             <div class="wb-welcome-icon">&#10022;</div>
             <div class="wb-welcome-title">August AI</div>
-            <div class="wb-welcome-desc">New session started. Full system access &mdash; read, write, execute, search, and control.</div>
+            <div class="wb-welcome-desc">New session started. Read, search, inspect, and preview skill sources freely. Imports and updates require an approved plan.</div>
             <div class="wb-welcome-chips">
                 <button class="wb-welcome-chip" onclick="fillWorkbenchPrompt('Refactor the auth module')">Refactor code</button>
                 <button class="wb-welcome-chip" onclick="fillWorkbenchPrompt('Debug why tests are failing')">Debug tests</button>
-                <button class="wb-welcome-chip" onclick="fillWorkbenchPrompt('Search the web for latest best practices')">Web search</button>
+                <button class="wb-welcome-chip" onclick="fillWorkbenchPrompt('Find a GitHub skill for Playwright browser testing, preview it, and wait for my approval before importing')">Fetch skill</button>
+                <button class="wb-welcome-chip" onclick="fillWorkbenchPrompt('Diagnose the proxy health, August Brain, vector DB, Supermemory, and recent errors')">Diagnose proxy</button>
             </div>
         </div>`;
     }
     renderWorkbenchPlan();
+    renderWorkbenchGoal();
+    loadWorkbenchAgentsUI(true).catch(() => {});
     setWorkbenchStatus('Ready', 'bg-emerald-400');
     showStatus('Workbench session reset', 'bg-slate-700 text-white');
 }
@@ -398,6 +1266,7 @@ async function importCapabilityLinkUI() {
             `MCP servers: ${(imported.mcpServers || []).map(item => `${item.name}${item.enabled === false ? ' (disabled)' : ''}`).join(', ') || 'none'}`
         ].join('\n');
         showStatus('Capability link imported', 'bg-emerald-600 text-white');
+        invalidateWorkbenchSlashCommands();
         await Promise.all([loadMcpUI(), loadSkillsUI(), loadPluginsUI(), loadCompatibilityUI(), loadMemoryPreview(), loadHealthUI()]);
     } catch (e) { resultEl.textContent = e.message; showStatus(e.message, 'bg-red-600 text-white'); }
 }

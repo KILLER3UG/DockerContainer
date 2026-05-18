@@ -353,36 +353,48 @@
                 <div class="wb-header">
                     <span class="wb-header-title">AI Workbench</span>
                     <span id="workbenchGateBadge" class="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[10px] font-semibold text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-300">Plan required</span>
+                    <span id="workbenchAgentBadge" class="wb-header-pill"><span class="wb-header-dot"></span>Agent: build</span>
+                    <span id="workbenchGoalBadge" class="wb-header-pill hidden"><span class="wb-header-dot"></span>Goal: active</span>
+                    <span class="wb-header-pill"><span class="wb-header-dot"></span>Shared skills</span>
                     <div class="flex-1"></div>
+                    <button onclick="fillWorkbenchPrompt('Find a useful GitHub skill for browser automation, preview it, and tell me what it would add before importing')" class="minimal-button rounded-xl px-3 py-1.5 text-xs font-semibold" title="Find an importable skill">Skills</button>
+                    <button onclick="loadWorkbenchDiagnosticsUI()" class="minimal-button rounded-xl px-3 py-1.5 text-xs font-semibold">Diagnostics</button>
                     <button onclick="resetWorkbenchUI()" class="minimal-button rounded-xl px-3 py-1.5 text-xs font-semibold">New</button>
                     <button id="wbInfoToggle" onclick="toggleWorkbenchDrawer()" class="minimal-button rounded-xl px-2 py-1.5 text-xs font-semibold" title="Session info &amp; approval gate">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                     </button>
                 </div>
+                <div id="workbenchDiagnostics" class="hidden border-b border-slate-100 bg-slate-50/80 px-4 py-3 text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-300"></div>
                 <!-- Chat Area -->
                 <div class="wb-chat-area">
                     <div id="workbenchMessages">
                         <div class="wb-welcome" id="wbWelcome">
                             <div class="wb-welcome-icon">&#10022;</div>
                             <div class="wb-welcome-title">August AI</div>
-                            <div class="wb-welcome-desc">Full system access &mdash; read, write, execute, search, and control. Proxy modifications require an approved plan.</div>
+                            <div class="wb-welcome-desc">Read, search, inspect, and fetch public skill sources freely. Imports, updates, commands, memory changes, and host control require an approved plan.</div>
                             <div class="wb-welcome-chips">
                                 <button class="wb-welcome-chip" onclick="fillWorkbenchPrompt('Refactor the auth module')">Refactor code</button>
                                 <button class="wb-welcome-chip" onclick="fillWorkbenchPrompt('Debug why tests are failing')">Debug tests</button>
-                                <button class="wb-welcome-chip" onclick="fillWorkbenchPrompt('Search the web for latest best practices')">Web search</button>
+                                <button class="wb-welcome-chip" onclick="fillWorkbenchPrompt('Find a GitHub skill for Playwright browser testing, preview it, and wait for my approval before importing')">Fetch skill</button>
+                                <button class="wb-welcome-chip" onclick="fillWorkbenchPrompt('Diagnose the proxy health, August Brain, vector DB, Supermemory, and recent errors')">Diagnose proxy</button>
                             </div>
                         </div>
                     </div>
                     <!-- Input Pill -->
                     <div class="wb-input-area">
+                        <div id="workbenchSlashPalette" class="wb-slash-palette hidden" role="listbox" aria-label="Workbench commands"></div>
                         <div class="wb-input-pill">
                             <div class="wb-input-top">
-                                <textarea id="workbenchInput" placeholder="Ask August anything..." rows="1" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendWorkbenchMessageUI()}" oninput="autoResizeTextarea(this)"></textarea>
+                                <textarea id="workbenchInput" placeholder="Ask August anything..." rows="1" onkeydown="handleWorkbenchInputKeydown(event)" oninput="handleWorkbenchInputInput(this)"></textarea>
                                 <button id="workbenchSendBtn" onclick="sendWorkbenchMessageUI()" disabled>
                                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/></svg>
                                 </button>
                             </div>
                             <div class="wb-input-bottom">
+                                <select id="workbenchAgent" onchange="resetWorkbenchUI()" title="Workbench agent">
+                                    <option value="build">build</option>
+                                    <option value="plan">plan</option>
+                                </select>
                                 <select id="workbenchProvider" onchange="resetWorkbenchUI()">
                                     <option value="claude">Claude</option>
                                     <option value="codex">Codex</option>
@@ -425,17 +437,38 @@
                     <section>
                         <h3>Hard Rule</h3>
                         <div class="rounded-xl border border-slate-200/80 bg-slate-50/80 p-3 dark:border-slate-800 dark:bg-slate-900/60">
-                            <p class="text-xs leading-5 text-slate-500 dark:text-slate-400">The AI can freely read, write, and execute commands <strong>anywhere on the system</strong> &mdash; except inside the proxy directory (<code>claudish-proxy/</code>). Mutations require an approved plan.</p>
+                            <p class="text-xs leading-5 text-slate-500 dark:text-slate-400">The AI can freely read, search, and inspect <strong>anywhere on the system</strong>. Any update, command, memory change, installation, or host-control action requires an approved plan.</p>
+                        </div>
+                    </section>
+                    <section>
+                        <h3>Goal</h3>
+                        <div id="workbenchGoalPanel" class="wb-goal-state">
+                            <div class="wb-goal-title">No active goal</div>
+                            <div class="wb-goal-condition">Use /goal to keep August working until a condition is met.</div>
+                        </div>
+                    </section>
+                    <section>
+                        <h3>Agent Registry</h3>
+                        <div id="workbenchAgentRegistry" class="wb-agent-registry">
+                            <div class="text-xs text-slate-500 dark:text-slate-400">Loading agents...</div>
                         </div>
                     </section>
                     <section>
                         <h3>Capabilities</h3>
                         <div class="space-y-2">
-                            <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300"><span class="w-1.5 h-1.5 rounded-full shrink-0 bg-emerald-400"></span>Read/search files anywhere</div>
-                            <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300"><span class="w-1.5 h-1.5 rounded-full shrink-0 bg-emerald-400"></span>Write files (except proxy system)</div>
-                            <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300"><span class="w-1.5 h-1.5 rounded-full shrink-0 bg-emerald-400"></span>Shell execution &amp; MCP tools</div>
-                            <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300"><span class="w-1.5 h-1.5 rounded-full shrink-0 bg-emerald-400"></span>Web search, memory, computer use</div>
-                            <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300"><span class="w-1.5 h-1.5 rounded-full shrink-0 bg-amber-400"></span>Modify proxy system (needs approval)</div>
+                            <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300"><span class="w-1.5 h-1.5 rounded-full shrink-0 bg-emerald-400"></span>Read/search/inspect anywhere</div>
+                            <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300"><span class="w-1.5 h-1.5 rounded-full shrink-0 bg-emerald-400"></span>Public web fetch and search</div>
+                            <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300"><span class="w-1.5 h-1.5 rounded-full shrink-0 bg-emerald-400"></span>Preview GitHub skills before import</div>
+                            <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300"><span class="w-1.5 h-1.5 rounded-full shrink-0 bg-amber-400"></span>Write/edit/delete files requires approval</div>
+                            <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300"><span class="w-1.5 h-1.5 rounded-full shrink-0 bg-amber-400"></span>Shell, installs, memory changes require approval</div>
+                            <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300"><span class="w-1.5 h-1.5 rounded-full shrink-0 bg-amber-400"></span>Host clicks, typing, launch/close require approval</div>
+                        </div>
+                    </section>
+                    <section>
+                        <h3>Skill Import</h3>
+                        <div class="wb-skill-actions">
+                            <button onclick="fillWorkbenchPrompt('Find a useful GitHub skill for repo maintenance, preview the best candidate, and wait for my approval before importing')" class="minimal-button rounded-xl px-3 py-2 text-xs font-semibold">Find</button>
+                            <button onclick="fillWorkbenchPrompt('Preview this skill URL and tell me what it would add before importing: ')" class="minimal-button rounded-xl px-3 py-2 text-xs font-semibold">Preview URL</button>
                         </div>
                     </section>
                     <section id="wbDrawerComputerSection">
@@ -450,6 +483,26 @@
                         </div>
                     </section>
                 </aside>
+                <div id="workbenchBtwPanel" class="wb-btw-panel hidden" aria-label="BTW side chat">
+                    <div class="wb-btw-head">
+                        <div>
+                            <div class="wb-btw-title">BTW</div>
+                            <div class="wb-btw-subtitle">Side question. No tools, no session mutation.</div>
+                        </div>
+                        <button type="button" class="wb-btw-close" onclick="closeBtwPanel()" title="Close">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                        </button>
+                    </div>
+                    <div id="workbenchBtwMessages" class="wb-btw-messages">
+                        <div class="wb-btw-empty">Ask with /btw while the main agent keeps working.</div>
+                    </div>
+                    <div class="wb-btw-input-row">
+                        <textarea id="workbenchBtwInput" rows="1" placeholder="Ask a side question..." onkeydown="handleBtwInputKeydown(event)"></textarea>
+                        <button id="workbenchBtwSendBtn" type="button" onclick="sendWorkbenchBtwQuestion()" title="Send BTW">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/></svg>
+                        </button>
+                    </div>
+                </div>
             </section>
 
             <section id="section-profiles" class="dashboard-section hidden">
@@ -923,21 +976,304 @@
                                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
                             </div>
                             <div>
-                                <h2 class="text-sm font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wider">AUGUST Brain Upgrade</h2>
-                                <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">Semantic memory, specialist routers, URL MCP servers, and supermemory</p>
+                                <h2 class="text-sm font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wider">AUGUST Console</h2>
+                                <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">Terminal-style agent, Workbench tools, approval gate, memory, MCP, and specialists</p>
                             </div>
                         </div>
                     </div>
                     <div class="px-5 pt-4 pb-0">
                         <div class="sub-tabs">
-                            <button class="sub-tab active" onclick="switchSubTab('august', 'semantic', this)">Semantic Memory</button>
+                            <button class="sub-tab active" onclick="switchSubTab('august', 'console', this); initAugustConsoleUI()">Console</button>
+                            <button class="sub-tab" onclick="switchSubTab('august', 'providers', this); loadMemoryProvidersUI()">Providers</button>
+                            <button class="sub-tab" onclick="switchSubTab('august', 'agents', this); loadAgentRegistryUI()">Agents</button>
+                            <button class="sub-tab" onclick="switchSubTab('august', 'sessions', this); loadAgentSessionsUI()">Sessions</button>
+                            <button class="sub-tab" onclick="switchSubTab('august', 'terminal', this); loadTerminalPanelUI()">Terminal</button>
+                            <button class="sub-tab" onclick="switchSubTab('august', 'automations', this); loadAutomationJobsUI()">Automations</button>
+                            <button class="sub-tab" onclick="switchSubTab('august', 'governance', this); searchMemoryGovernanceUI()">Governance</button>
+                            <button class="sub-tab" onclick="switchSubTab('august', 'diagnostics', this); loadBrainDiagnosticsUI()">Diagnostics</button>
+                            <button class="sub-tab" onclick="switchSubTab('august', 'semantic', this)">Semantic Memory</button>
                             <button class="sub-tab" onclick="switchSubTab('august', 'specialists', this)">Specialists</button>
                             <button class="sub-tab" onclick="switchSubTab('august', 'urlmcp', this)">URL MCP</button>
                             <button class="sub-tab" onclick="switchSubTab('august', 'supermemory', this)">Supermemory</button>
                             <button class="sub-tab" onclick="switchSubTab('august', 'vector', this)">Vector Memory</button>
                         </div>
                     </div>
-                    <div class="sub-tab-panel active" data-tab-group="august" data-tab="semantic">
+                    <div class="sub-tab-panel active" data-tab-group="august" data-tab="console">
+                        <div class="august-console-shell">
+                            <div class="august-console-toolbar">
+                                <div class="august-console-title">
+                                    <span class="august-console-light"></span>
+                                    <span>august-local</span>
+                                    <span id="augustConsoleStatus" class="august-console-status">ready</span>
+                                </div>
+                                <div class="august-console-actions">
+                                    <select id="augustConsoleProvider" class="august-console-select" onchange="resetAugustConsoleUI()">
+                                        <option value="claude">Claude route</option>
+                                        <option value="codex">Codex route</option>
+                                    </select>
+                                    <button onclick="sendAugustConsoleCommand(':diagnose')" class="august-console-button">Doctor</button>
+                                    <button onclick="sendAugustConsoleCommand(':tools')" class="august-console-button">Tools</button>
+                                    <button onclick="resetAugustConsoleUI()" class="august-console-button">New</button>
+                                </div>
+                            </div>
+                            <div class="august-console-main">
+                                <div class="august-console-pane">
+                                    <div id="augustConsoleOutput" class="august-console-output" aria-live="polite">
+                                        <div class="august-console-welcome">
+                                            <div class="august-console-kicker">AUGUST through Claudish Proxy</div>
+                                            <div class="august-console-heading">Plan, inspect, execute, and remember from one local console.</div>
+                                            <div class="august-console-copy">Read/search/inspect tools are available immediately. File edits, shell commands, memory changes, installs, imports, and host-control actions stay locked until August submits a plan and you approve it.</div>
+                                            <div class="august-console-chiprow">
+                                                <button onclick="sendAugustConsoleCommand(':diagnose')">diagnose proxy</button>
+                                                <button onclick="sendAugustConsoleCommand(':tools')">list tools</button>
+                                                <button onclick="fillAugustConsoleInput('Create a plan first and wait for my approval before changing anything: ')">plan first</button>
+                                                <button onclick="fillAugustConsoleInput('Inspect this project and tell me the safest next step: ')">inspect repo</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="august-console-inputbar">
+                                        <span class="august-console-prompt">august&gt;</span>
+                                        <textarea id="augustConsoleInput" rows="1" placeholder="Ask August or type :help" onkeydown="handleAugustConsoleKeydown(event)" oninput="autoResizeAugustConsoleInput(this)"></textarea>
+                                        <button id="augustConsoleSendBtn" onclick="sendAugustConsoleInput()" title="Send">
+                                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/></svg>
+                                        </button>
+                                    </div>
+                                </div>
+                                <aside class="august-console-side">
+                                    <section class="august-console-card">
+                                        <div class="august-console-card-head">
+                                            <span>Approval Gate</span>
+                                            <span id="augustConsoleGateBadge" class="august-console-badge warn">locked</span>
+                                        </div>
+                                        <div id="augustConsolePlan" class="august-console-plan">No plan submitted yet.</div>
+                                        <button id="augustConsoleApproveBtn" onclick="approveAugustConsolePlanUI()" class="august-console-approve" disabled>Approve Plan</button>
+                                    </section>
+                                    <section class="august-console-card">
+                                        <div class="august-console-card-head">
+                                            <span>Capabilities</span>
+                                            <button onclick="loadAugustConsoleSnapshot()" class="august-console-mini">refresh</button>
+                                        </div>
+                                        <div id="augustConsoleCapabilities" class="august-console-capabilities">
+                                            <span>Loading tool inventory...</span>
+                                        </div>
+                                    </section>
+                                    <section class="august-console-card">
+                                        <div class="august-console-card-head">
+                                            <span>Shortcuts</span>
+                                        </div>
+                                        <div class="august-console-shortcuts">
+                                            <button onclick="sendAugustConsoleCommand(':help')">:help</button>
+                                            <button onclick="sendAugustConsoleCommand(':clear')">:clear</button>
+                                            <button onclick="sendAugustConsoleCommand(':approve')">:approve</button>
+                                            <button onclick="sendAugustConsoleCommand(':new')">:new</button>
+                                        </div>
+                                    </section>
+                                </aside>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="sub-tab-panel" data-tab-group="august" data-tab="providers">
+                        <div class="p-5">
+                            <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+                                <div class="space-y-4">
+                                    <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                                        <p id="memoryProviderStatus" class="text-xs text-slate-500 dark:text-slate-400">Hybrid memory provider status, hooks, and recall results.</p>
+                                        <div class="flex flex-wrap gap-2">
+                                            <input id="providerRecallQuery" class="minimal-input w-56 rounded-xl px-3 py-2 text-xs" value="august brain proxy" placeholder="Recall query">
+                                            <button onclick="loadMemoryProvidersUI()" class="minimal-button rounded-xl px-4 py-2.5 text-xs font-semibold">Recall</button>
+                                            <button onclick="rebuildSqliteMemoryUI()" class="minimal-button rounded-xl px-4 py-2.5 text-xs font-semibold">Rebuild SQLite</button>
+                                        </div>
+                                    </div>
+                                    <div id="memoryProviderList" class="grid gap-3 md:grid-cols-2">
+                                        <div class="text-sm text-slate-400 dark:text-slate-500 italic">Loading memory providers...</div>
+                                    </div>
+                                </div>
+                                <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950">
+                                    <h3 class="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">Recall Preview</h3>
+                                    <div id="memoryProviderRecall" class="mt-3 max-h-[520px] overflow-auto text-xs text-slate-600 dark:text-slate-300">Run recall to see provider-ranked context.</div>
+                                    <h3 class="mt-5 text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">Recent Hook Events</h3>
+                                    <div id="memoryProviderEvents" class="mt-3 max-h-44 overflow-auto text-xs text-slate-600 dark:text-slate-300">No provider events loaded.</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="sub-tab-panel" data-tab-group="august" data-tab="agents">
+                        <div class="p-5">
+                            <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+                                <div>
+                                    <div class="mb-4 flex items-center justify-between">
+                                        <p class="text-xs text-slate-500 dark:text-slate-400">Agent modes, delegation settings, and inherited permissions.</p>
+                                        <button onclick="loadAgentRegistryUI()" class="minimal-button rounded-xl px-4 py-2.5 text-xs font-semibold">Refresh</button>
+                                    </div>
+                                    <div id="agentRegistryList" class="grid gap-3 md:grid-cols-2">
+                                        <div class="text-sm text-slate-400 dark:text-slate-500 italic">Loading agents...</div>
+                                    </div>
+                                </div>
+                                <div class="space-y-4">
+                                    <div class="rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
+                                        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">Create or Update Agent</h3>
+                                        <div class="mt-3 grid gap-3">
+                                            <input id="agentIdInput" class="minimal-input w-full rounded-xl p-2.5 text-xs font-mono" placeholder="agent id">
+                                            <input id="agentRoleInput" class="minimal-input w-full rounded-xl p-2.5 text-xs" placeholder="Role">
+                                            <textarea id="agentGoalInput" class="minimal-input h-20 w-full rounded-xl p-2.5 text-xs" placeholder="Goal"></textarea>
+                                            <select id="agentModeInput" class="minimal-input w-full rounded-xl p-2.5 text-xs">
+                                                <option value="subagent">subagent</option>
+                                                <option value="primary">primary</option>
+                                            </select>
+                                            <select id="agentTemplateInput" class="minimal-input w-full rounded-xl p-2.5 text-xs">
+                                                <option value="general">permissions: general</option>
+                                                <option value="plan">permissions: plan</option>
+                                                <option value="explore">permissions: explore</option>
+                                                <option value="build">permissions: build</option>
+                                            </select>
+                                            <label class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300"><input id="agentMemoryEnabledInput" type="checkbox" checked> Memory enabled</label>
+                                            <label class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300"><input id="agentDelegationInput" type="checkbox"> Allow delegation</label>
+                                            <button onclick="saveAgentRegistryUI()" class="minimal-button primary rounded-xl py-2.5 text-xs font-semibold">Save Agent</button>
+                                        </div>
+                                    </div>
+                                    <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950">
+                                        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">Inherited Permission Check</h3>
+                                        <div class="mt-3 grid grid-cols-2 gap-2">
+                                            <input id="agentParentInput" class="minimal-input rounded-xl p-2.5 text-xs font-mono" value="build">
+                                            <input id="agentChildInput" class="minimal-input rounded-xl p-2.5 text-xs font-mono" value="general">
+                                            <button onclick="deriveAgentPermissionsUI()" class="minimal-button col-span-2 rounded-xl py-2.5 text-xs font-semibold">Check Inheritance</button>
+                                        </div>
+                                        <pre id="agentPermissionPreview" class="mt-3 max-h-48 overflow-auto rounded-xl border border-slate-200 bg-white p-3 text-[10px] text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">Select parent and child agents.</pre>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="sub-tab-panel" data-tab-group="august" data-tab="sessions">
+                        <div class="p-5">
+                            <div class="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+                                <div class="space-y-4">
+                                    <div class="rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
+                                        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">Agent Session</h3>
+                                        <div class="mt-3 grid gap-3">
+                                            <input id="agentSessionTitleInput" class="minimal-input w-full rounded-xl p-2.5 text-xs" placeholder="Session title">
+                                            <input id="agentSessionAgentInput" class="minimal-input w-full rounded-xl p-2.5 text-xs font-mono" value="build" placeholder="agent">
+                                            <input id="agentSessionParentInput" class="minimal-input w-full rounded-xl p-2.5 text-xs font-mono" placeholder="parent session id">
+                                            <textarea id="agentSessionTaskInput" class="minimal-input h-20 w-full rounded-xl p-2.5 text-xs" placeholder="Task"></textarea>
+                                            <input id="agentSessionCwdInput" class="minimal-input w-full rounded-xl p-2.5 text-xs font-mono" placeholder="cwd">
+                                            <button onclick="createAgentSessionUI()" class="minimal-button primary rounded-xl py-2.5 text-xs font-semibold">Create Session</button>
+                                        </div>
+                                    </div>
+                                    <div class="rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
+                                        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">Run Through Session</h3>
+                                        <div class="mt-3 grid gap-3">
+                                            <input id="agentSessionRunIdInput" class="minimal-input w-full rounded-xl p-2.5 text-xs font-mono" placeholder="session id">
+                                            <textarea id="agentSessionCommandInput" class="minimal-input h-20 w-full rounded-xl p-2.5 text-xs font-mono" placeholder="node -v"></textarea>
+                                            <input id="agentSessionTimeoutInput" class="minimal-input w-full rounded-xl p-2.5 text-xs font-mono" value="180000" placeholder="timeout ms">
+                                            <label class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300"><input id="agentSessionApprovedInput" type="checkbox"> Approved if command is gated</label>
+                                            <button onclick="runAgentSessionCommandUI()" class="minimal-button rounded-xl py-2.5 text-xs font-semibold">Run Command</button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="space-y-4">
+                                    <div class="flex items-center justify-between">
+                                        <p id="agentSessionSummary" class="text-xs text-slate-500 dark:text-slate-400">Durable agent sessions, todos, child requests, and active-run guard.</p>
+                                        <button onclick="loadAgentSessionsUI()" class="minimal-button rounded-xl px-4 py-2.5 text-xs font-semibold">Refresh</button>
+                                    </div>
+                                    <div id="agentSessionList" class="grid gap-3 md:grid-cols-2">
+                                        <div class="text-sm text-slate-400 dark:text-slate-500 italic">Loading agent sessions...</div>
+                                    </div>
+                                    <pre id="agentSessionDetail" class="min-h-40 max-h-96 overflow-auto rounded-2xl border border-slate-200 bg-slate-950 p-4 text-[11px] text-slate-100 dark:border-slate-800">Select a session to inspect its tree, requests, todos, and output.</pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="sub-tab-panel" data-tab-group="august" data-tab="terminal">
+                        <div class="p-5">
+                            <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+                                <div class="space-y-4">
+                                    <div class="rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
+                                        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">Run Command</h3>
+                                        <div class="mt-3 grid gap-3">
+                                            <input id="terminalCwdInput" class="minimal-input w-full rounded-xl p-2.5 text-xs font-mono" placeholder="cwd, defaults to proxy process cwd">
+                                            <textarea id="terminalCommandInput" class="minimal-input h-24 w-full rounded-xl p-2.5 text-xs font-mono" placeholder="node -v"></textarea>
+                                            <input id="terminalTimeoutInput" class="minimal-input w-full rounded-xl p-2.5 text-xs font-mono" value="180000" placeholder="timeout ms">
+                                            <label class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300"><input id="terminalApprovedInput" type="checkbox"> I approve this command if it is gated</label>
+                                            <button onclick="runTerminalCommandUI()" class="minimal-button primary rounded-xl py-2.5 text-xs font-semibold">Run</button>
+                                        </div>
+                                    </div>
+                                    <pre id="terminalCommandOutput" class="min-h-40 max-h-80 overflow-auto rounded-2xl border border-slate-200 bg-slate-950 p-4 text-[11px] text-slate-100 dark:border-slate-800">Terminal output will appear here.</pre>
+                                </div>
+                                <div class="space-y-4">
+                                    <div class="rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
+                                        <div class="flex items-center justify-between">
+                                            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">Sessions</h3>
+                                            <button onclick="createTerminalSessionUI()" class="minimal-button rounded-xl px-3 py-1.5 text-xs font-semibold">Start Shell</button>
+                                        </div>
+                                        <div id="terminalSessionList" class="mt-3 grid gap-2 text-xs text-slate-600 dark:text-slate-300">Loading sessions...</div>
+                                    </div>
+                                    <div class="rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
+                                        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">Pending Approvals</h3>
+                                        <div id="terminalApprovalList" class="mt-3 grid gap-2 text-xs text-slate-600 dark:text-slate-300">Loading approvals...</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="sub-tab-panel" data-tab-group="august" data-tab="automations">
+                        <div class="p-5">
+                            <div class="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+                                <div class="rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
+                                    <h3 class="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">Automation Job</h3>
+                                    <div class="mt-3 grid gap-3">
+                                        <input id="automationNameInput" class="minimal-input w-full rounded-xl p-2.5 text-xs" placeholder="Job name">
+                                        <input id="automationScheduleInput" class="minimal-input w-full rounded-xl p-2.5 text-xs font-mono" placeholder="manual, @hourly, every 30 minutes">
+                                        <select id="automationTypeInput" class="minimal-input w-full rounded-xl p-2.5 text-xs">
+                                            <option value="memory_event">memory_event</option>
+                                            <option value="command">command</option>
+                                        </select>
+                                        <input id="automationAgentInput" class="minimal-input w-full rounded-xl p-2.5 text-xs font-mono" value="build" placeholder="agent">
+                                        <textarea id="automationTaskInput" class="minimal-input h-20 w-full rounded-xl p-2.5 text-xs" placeholder="Task or memory event"></textarea>
+                                        <textarea id="automationCommandInput" class="minimal-input h-20 w-full rounded-xl p-2.5 text-xs font-mono" placeholder="Command for command jobs"></textarea>
+                                        <input id="automationCwdInput" class="minimal-input w-full rounded-xl p-2.5 text-xs font-mono" placeholder="cwd">
+                                        <input id="automationTimeoutInput" class="minimal-input w-full rounded-xl p-2.5 text-xs font-mono" value="180000" placeholder="timeout ms">
+                                        <label class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300"><input id="automationApprovedInput" type="checkbox"> Approved to run without another prompt</label>
+                                        <button onclick="saveAutomationJobUI()" class="minimal-button primary rounded-xl py-2.5 text-xs font-semibold">Save Automation</button>
+                                    </div>
+                                </div>
+                                <div class="space-y-4">
+                                    <div id="automationJobList" class="grid gap-3 md:grid-cols-2">
+                                        <div class="text-sm text-slate-400 dark:text-slate-500 italic">Loading automation jobs...</div>
+                                    </div>
+                                    <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950">
+                                        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">Recent Runs</h3>
+                                        <div id="automationRunList" class="mt-3 grid gap-2 text-xs text-slate-600 dark:text-slate-300">No runs yet.</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="sub-tab-panel" data-tab-group="august" data-tab="governance">
+                        <div class="p-5">
+                            <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                                <p class="text-xs text-slate-500 dark:text-slate-400">Search memories, pin or archive core context, and explicitly forget selected records.</p>
+                                <div class="flex gap-2">
+                                    <input id="governanceQueryInput" class="minimal-input w-64 rounded-xl px-3 py-2 text-xs" value="august brain" placeholder="Memory to govern">
+                                    <button onclick="searchMemoryGovernanceUI()" class="minimal-button rounded-xl px-4 py-2.5 text-xs font-semibold">Search</button>
+                                </div>
+                            </div>
+                            <div id="governanceResults" class="mt-4 grid gap-4 xl:grid-cols-3">
+                                <div class="text-sm text-slate-400 dark:text-slate-500 italic">Search memory governance targets.</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="sub-tab-panel" data-tab-group="august" data-tab="diagnostics">
+                        <div class="p-5">
+                            <div class="flex items-center justify-between">
+                                <p id="brainDiagnosticsSummary" class="text-xs text-slate-500 dark:text-slate-400">August Brain diagnostics and wiring checks.</p>
+                                <button onclick="loadBrainDiagnosticsUI()" class="minimal-button rounded-xl px-4 py-2.5 text-xs font-semibold">Refresh</button>
+                            </div>
+                            <div id="brainDiagnosticsChecks" class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                                <div class="text-sm text-slate-400 dark:text-slate-500 italic">Loading diagnostics...</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="sub-tab-panel" data-tab-group="august" data-tab="semantic">
                         <div class="p-5">
                             <div class="flex items-center justify-between mb-4">
                                 <p class="text-xs text-slate-500 dark:text-slate-400">Durable facts remembered by AUGUST across sessions. Facts with TTL are auto-expired.</p>
@@ -992,7 +1328,7 @@
                                         <label class="block text-[11px] font-semibold uppercase text-slate-500 dark:text-slate-400">API Key</label>
                                         <input id="supermemoryApiKey" class="minimal-input w-full rounded-xl p-2.5 text-xs font-mono" placeholder="sk-..." type="password">
                                         <label class="block text-[11px] font-semibold uppercase text-slate-500 dark:text-slate-400">API URL</label>
-                                        <input id="supermemoryUrl" class="minimal-input w-full rounded-xl p-2.5 text-xs font-mono" placeholder="https://supermemory.ai/api">
+                                        <input id="supermemoryUrl" class="minimal-input w-full rounded-xl p-2.5 text-xs font-mono" placeholder="https://api.supermemory.ai">
                                         <button onclick="saveSupermemoryConfigUI()" class="minimal-button primary rounded-xl py-2.5 text-xs font-semibold">Save</button>
                                         <p id="supermemoryStatus" class="text-[10px] text-slate-400"></p>
                                     </div>
@@ -1208,6 +1544,7 @@
     <script src="/ui/dashboard.js"></script>
     <script src="/ui/profiles.js"></script>
     <script src="/ui/workbench.js"></script>
+    <script src="/ui/august-console.js"></script>
     <script src="/ui/sections.js"></script>
     <script>
         // ── Init ── (every step wrapped so one failure never blocks another)

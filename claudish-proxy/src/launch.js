@@ -3,6 +3,7 @@ const readline = require('readline');
 const { spawn } = require('child_process');
 const path = require('path');
 const { saveProfile, getProfile } = require('./utils/config');
+const { runAugustTerminal } = require('./august-terminal');
 
 const PROXY_URL = process.env.CLAUDISH_PROXY_URL || 'http://127.0.0.1:8085';
 const IS_TTY = process.stdin.isTTY;
@@ -78,6 +79,10 @@ async function fetchUpstreamModels() {
     });
 }
 
+async function launchAugust(args) {
+    await runAugustTerminal(args, { proxyUrl: PROXY_URL });
+}
+
 function updateConfig(tool, model) {
     try {
         if (tool === 'claude') {
@@ -133,13 +138,20 @@ function updateConfig(tool, model) {
 
 async function main() {
     let tool = process.argv[2];
-    if (!tool || (tool !== 'claude' && tool !== 'codex')) {
+    if (!tool || (tool !== 'claude' && tool !== 'codex' && tool !== 'august')) {
         console.log('\n  Claudish Proxy Launcher\n');
         console.log('  Usage:');
         console.log('    claude-local  [--model <model>] [args...]   Anthropic/Claude CLI');
         console.log('    codex-local   [--model <model>] [args...]   OpenAI/Codex CLI');
+        console.log('    august-local  [--provider claude|codex]     August terminal');
+        console.log('                  [--web] [--url-only]          Optional browser console');
         console.log('');
         process.exit(1);
+    }
+
+    if (tool === 'august') {
+        await launchAugust(process.argv.slice(3));
+        return;
     }
 
     console.log(`\n  Claudish Proxy — ${tool.toUpperCase()}`);
