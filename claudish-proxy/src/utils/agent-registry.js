@@ -5,8 +5,8 @@ const AGENTS_FILE = path.join(__dirname, '..', 'august_agents.json');
 
 const EDIT_TOOLS = new Set([
     'august__write_file',
-    'workbench_write_file',
-    'workbench_replace_text',
+    'august__write_file',
+    'august__replace_text',
     'apply_patch',
     'write',
     'edit'
@@ -14,13 +14,13 @@ const EDIT_TOOLS = new Set([
 
 const SHELL_TOOLS = new Set([
     'august__bash',
-    'workbench_run_command',
+    'august__run_command',
     'terminal_execute',
     'terminal_submit_command'
 ]);
 
 const DELEGATE_TOOLS = new Set([
-    'workbench_spawn_subagent',
+    'august__spawn_subagent',
     'august__spawn_subagent'
 ]);
 
@@ -126,7 +126,7 @@ function getAgent(id = 'build') {
 }
 
 function classifyTool(toolName) {
-    const name = String(toolName || '');
+    const name = String(toolName || '').replace(/^workbench_/, 'august__');
     if (DELEGATE_TOOLS.has(name) || /spawn_subagent|delegate/i.test(name)) return 'delegate';
     if (EDIT_TOOLS.has(name) || /write|edit|patch|delete|rename|move/i.test(name)) return 'edit';
     if (SHELL_TOOLS.has(name) || /bash|command|terminal|spawn|run/i.test(name)) return 'shell';

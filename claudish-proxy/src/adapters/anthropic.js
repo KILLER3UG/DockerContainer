@@ -559,11 +559,12 @@ function convertReasoningDetailToThinkingBlock(detail, index) {
     return block;
 }
 
-function sanitizeMessagesForOpenAIUpstream(messages, backendModel) {
+function sanitizeMessagesForOpenAIUpstream(messages, backendModel, targetUrl) {
+    const isMiniMax = isMiniMaxTarget({ model: backendModel, targetUrl });
     return (messages || []).map(message => {
         if (!message || typeof message !== 'object') return message;
         const sanitized = { ...message };
-        if (!isMiniMaxModel(backendModel)) {
+        if (!isMiniMax) {
             delete sanitized.reasoning;
             delete sanitized.reasoning_content;
             delete sanitized.reasoning_details;
@@ -653,7 +654,7 @@ async function resolveManagedWebToolCalls(initialData, oReq, cfg) {
 
         const outgoingPayload = {
             ...requestPayload,
-            messages: sanitizeMessagesForOpenAIUpstream(requestPayload.messages, requestPayload.model)
+            messages: sanitizeMessagesForOpenAIUpstream(requestPayload.messages, requestPayload.model, cfg.targetUrl)
         };
 
         const response = await fetch(cfg.targetUrl, {
@@ -904,7 +905,7 @@ async function buildOpenAIRequest(aReq, ctx, cfg, clientId) {
 
     const oReq = {
         model: backendModel,
-        messages: sanitizeMessagesForOpenAIUpstream(openaiMessages, backendModel)
+        messages: sanitizeMessagesForOpenAIUpstream(openaiMessages, backendModel, cfg.targetUrl)
     };
 
     adapterBase.applyGenerationDefaults(oReq, aReq, {
@@ -1397,6 +1398,28 @@ function extractEmbeddedToolCalls(content) {
     return { text: content, toolCalls };
 }
 
+function extractThinkTags(text) {
+    let thinking = '';
+    let content = text || '';
+    
+    // Match <think>...</think> tags (case-insensitive)
+    const thinkRegex = /<think>([\s\S]*?)<\/think>/i;
+    const match = thinkRegex.exec(content);
+    if (match) {
+        thinking = match[1].trim();
+        content = content.replace(thinkRegex, '').trim();
+    } else {
+        // Handle unclosed <think> tag at the end
+        const unclosedThinkRegex = /<think>([\s\S]*)$/i;
+        const unclosedMatch = unclosedThinkRegex.exec(content);
+        if (unclosedMatch) {
+            thinking = unclosedMatch[1].trim();
+            content = content.replace(unclosedThinkRegex, '').trim();
+        }
+    }
+    return { content, thinking };
+}
+
 // ── Translate OpenAI response -> Anthropic response ──
 function translateOpenAIResponse(openaiData, requestModel, ctx) {
     const choice = openaiData.choices?.[0];
@@ -1404,10 +1427,16 @@ function translateOpenAIResponse(openaiData, requestModel, ctx) {
 
     let toolCalls = choice.message?.tool_calls || [];
     let messageContent = choice.message?.content || '';
-    const reasoningContent = choice.message?.reasoning || choice.message?.reasoning_content || '';
+    let reasoningContent = choice.message?.reasoning || choice.message?.reasoning_content || '';
     const reasoningDetails = Array.isArray(choice.message?.reasoning_details)
         ? choice.message.reasoning_details
         : [];
+
+    if (!reasoningContent && reasoningDetails.length === 0 && messageContent.includes('<think>')) {
+        const extracted = extractThinkTags(messageContent);
+        messageContent = extracted.content;
+        reasoningContent = extracted.thinking;
+    }
 
     // Auto-repair: extract tool_use blocks embedded in content string
     const repaired = extractEmbeddedToolCalls(messageContent);
@@ -1771,8 +1800,12 @@ async function handleMessages(req, res, cleanPath, reqId) {
                 extractAndSaveMemories(aReq.messages, data, cfg, upstreamModel, clientId).catch(e => console.warn('[Auto-Memory] Extraction failed:', e.message));
             }
 
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(aRes));
+            if (aReq.stream === true) {
+                sendSimulatedAnthropicStream(res, aRes, clientFacingModel);
+            } else {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(aRes));
+            }
         } catch (e) {
             requestStatus = 'error';
             requestError = e.message;

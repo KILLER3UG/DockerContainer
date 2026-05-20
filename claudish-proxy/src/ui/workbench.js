@@ -270,6 +270,7 @@ function renderWorkbenchPlan() {
         planEl.innerHTML = '<p class="text-center py-3 opacity-60">No plan submitted yet</p>';
         const gateDiv = planEl.closest('.gate-panel');
         if (gateDiv) gateDiv.classList.remove('is-approved');
+        renderInlinePlanApprovalCard();
         return;
     }
     const gateDiv2 = planEl.closest('.gate-panel');
@@ -291,6 +292,74 @@ function renderWorkbenchPlan() {
         `<div class="mt-3 pt-2 border-t border-dashed border-slate-300 dark:border-slate-700 text-[11px] ${approved ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'} font-semibold">${approved ? 'Approved - planned mutations unlocked' : 'All mutations are blocked until approval'}</div>`,
         mutationCount ? `<div class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">Mutation audit: ${mutationCount} recorded action${mutationCount === 1 ? '' : 's'}</div>` : ''
     ].filter(Boolean).join('\n');
+
+    renderInlinePlanApprovalCard();
+}
+
+function renderInlinePlanApprovalCard() {
+    const messages = document.getElementById('workbenchMessages');
+    if (!messages) return;
+
+    const existing = document.getElementById('inlinePlanApprovalCard');
+    if (existing) {
+        existing.remove();
+    }
+
+    if (!workbenchSession?.plan) return;
+
+    const plan = workbenchSession.plan;
+    const approved = workbenchSession.approved === true;
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    const title = approved ? '✓ Proposed Plan Approved' : '⚠ Proposed Plan Pending Approval';
+    const borderLeftColor = approved ? '#10b981' : '#f59e0b';
+    const titleClass = approved ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-amber-600 dark:text-amber-400 font-bold';
+
+    let actionsHtml = '';
+    if (!approved) {
+        actionsHtml = `
+            <div class="flex gap-2 mt-3">
+                <button onclick="approvePlanFromChat(this)" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-semibold cursor-pointer transition-colors border-0">
+                    Approve Plan
+                </button>
+            </div>
+        `;
+    } else {
+        actionsHtml = `
+            <div class="text-xs text-emerald-600 dark:text-emerald-400 font-semibold mt-2">
+                Plan approved. Planned mutations are unlocked.
+            </div>
+        `;
+    }
+
+    messages.insertAdjacentHTML('beforeend', `
+        <div id="inlinePlanApprovalCard" class="wb-msg is-assistant" style="border-left: 2px solid ${borderLeftColor}; padding-left: 12px; margin-bottom: 14px;">
+            <div class="wb-msg-header flex justify-between items-center mb-1">
+                <span class="wb-msg-role ${titleClass}">${title}</span>
+                <span class="wb-msg-time text-xs opacity-50">${time}</span>
+            </div>
+            <div class="wb-msg-body">
+                <div class="md-content">
+                    <p class="font-semibold mb-1 text-xs">${escapeHtml(plan.summary || 'A plan has been submitted for approval.')}</p>
+                    ${Array.isArray(plan.steps) && plan.steps.length ? `<ol class="list-decimal pl-4 mb-2 text-xs opacity-80">${plan.steps.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ol>` : ''}
+                    ${actionsHtml}
+                </div>
+            </div>
+        </div>
+    `);
+    messages.scrollTop = messages.scrollHeight;
+}
+
+async function approvePlanFromChat(btn) {
+    btn.disabled = true;
+    btn.textContent = 'Approving...';
+    try {
+        await approveWorkbenchPlanUI();
+    } catch (e) {
+        btn.disabled = false;
+        btn.textContent = 'Approve Plan';
+        showStatus(e.message, 'bg-red-600 text-white');
+    }
 }
 
 function renderWorkbenchGoal(data) {

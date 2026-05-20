@@ -1,6 +1,6 @@
 {
   "claude": {
-    "currentModel": "claude-opus-4-6",
+    "currentModel": "claude-sonnet-4-6",
     "targetUrl": "https://api.minimax.io/anthropic/v1/messages",
     "apiKey": "${env:MINIMAX_API_KEY}",
     "_upstreamModel": "claude-opus-4-6",
@@ -89,9 +89,10 @@
     },
     {
       "name": "browser-use",
-      "enabled": false,
+      "enabled": true,
       "source": "custom",
       "command": "uvx",
+      "headers": {},
       "args": [
         "--from",
         "browser-use[cli]",
@@ -100,6 +101,14 @@
       ],
       "env": {},
       "timeoutMs": 60000
+    },
+    {
+      "name": "notebooklm-mcp",
+      "enabled": true,
+      "source": "custom",
+      "url": "http://host.docker.internal:3000/mcp",
+      "headers": {},
+      "timeoutMs": 30000
     }
   ],
   "customPlugins": [
@@ -136,6 +145,44 @@
       ],
       "notes": "",
       "updatedAt": "2026-05-14T20:03:07.328Z"
+    },
+    {
+      "name": "notebooklm-mcp",
+      "enabled": true,
+      "description": "MCP server for Google NotebookLM — chat, source ingestion, audio overviews, citations, stdio + Streamable-HTTP transports.",
+      "sourceUrl": "https://raw.githubusercontent.com/PleasePrompto/notebooklm-mcp/main/package.json",
+      "skills": [],
+      "mcpServers": [
+        {
+          "name": "notebooklm-mcp",
+          "enabled": true,
+          "source": "custom",
+          "url": "http://host.docker.internal:3000/mcp",
+          "headers": {},
+          "timeoutMs": 30000
+        }
+      ],
+      "notes": "",
+      "updatedAt": "2026-05-18T17:24:37.556Z"
+    },
+    {
+      "name": "Playwright-Cross-Browser-Testing-and-Automation-Framework",
+      "enabled": true,
+      "description": "Uses Microsoft Playwright to automate Chromium, Firefox, and WebKit with one API for testing, scraping, screenshots, tracing, and login flows. It fits teams that need reliable browser sessions, modern locator-based automation, and strong debugging artifacts instead of brittle timeout-heavy scripts.",
+      "sourceUrl": "https://raw.githubusercontent.com/agentskillexchange/skills/main/skills/playwright-cross-browser-testing-and-automation-framework/SKILL.md",
+      "skills": [
+        {
+          "name": "Playwright-Cross-Browser-Testing-and-Automation-Framework",
+          "enabled": true,
+          "description": "Uses Microsoft Playwright to automate Chromium, Firefox, and WebKit with one API for testing, scraping, screenshots, tracing, and login flows. It fits teams that need reliable browser sessions, modern locator-based automation, and strong debugging artifacts instead of brittle timeout-heavy scripts.",
+          "trigger": "When the user requests Playwright-Cross-Browser-Testing-and-Automation-Framework behavior or this imported capability applies.",
+          "instructions": "---\nname: \"Playwright Cross-Browser Testing and Automation Framework\"\nslug: \"playwright-cross-browser-testing-and-automation-framework\"\ndescription: \"Uses Microsoft Playwright to automate Chromium, Firefox, and WebKit with one API for testing, scraping, screenshots, tracing, and login flows. It fits teams that need reliable browser sessions, modern locator-based automation, and strong debugging artifacts instead of brittle timeout-heavy scripts.\"\ngithub_stars: 85523\nverification: \"listed\"\nsource: \"https://github.com/microsoft/playwright\"\nauthor: \"Microsoft\"\npublisher_type: \"company\"\ncategory: \"Browser Automation\"\nframework: \"Multi-Framework\"\ntool_ecosystem:\n  github_repo: \"microsoft/playwright\"\n  github_stars: 85523\n  npm_package: \"playwright\"\n  npm_weekly_downloads: 46839239\n---\n\n# Playwright Cross-Browser Testing and Automation Framework\n\nUses Microsoft Playwright to automate Chromium, Firefox, and WebKit with one API for testing, scraping, screenshots, tracing, and login flows. It fits teams that need reliable browser sessions, modern locator-based automation, and strong debugging artifacts instead of brittle timeout-heavy scripts.\n\n## Prerequisites\n\nNode.js 20.x, 22.x, or 24.x\n\n## Installation\n\nUse the upstream install or setup path that matches your environment:\n- npm install -g @playwright/cli@latest\n- npm i playwright\n\nRequirements and caveats from upstream:\n- Playwright is also available for [Python](https://playwright.dev/python/docs/intro), [.NET](https://playwright.dev/dotnet/docs/intro), and [Java](https://playwright.dev/java/docs/intro).\n\nBasic usage or getting-started notes:\n- bash\n- Optionally install skills for richer agent integration:\n- playwright-cli install --skills\n\n- Source: https://github.com/microsoft/playwright\n- Extracted from upstream docs: https://raw.githubusercontent.com/microsoft/playwright/HEAD/README.md\n\n## Documentation\n\n- https://playwright.dev/docs/intro\n\n## Source\n\n- [Agent Skill Exchange](https://agentskillexchange.com/skills/playwright-cross-browser-testing-and-automation-framework/)",
+          "updatedAt": "2026-05-18T19:05:43.244Z"
+        }
+      ],
+      "mcpServers": [],
+      "notes": "",
+      "updatedAt": "2026-05-18T19:05:43.258Z"
     }
   ]
 }

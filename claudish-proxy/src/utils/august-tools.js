@@ -499,7 +499,7 @@ function getAugustToolDefinitions() {
     return AUGUST_TOOLS;
 }
 
-async function executeAugustToolCall(toolName, args) {
+async function executeAugustToolCall(toolName, args, bypassConfirmation = false) {
     try {
         switch (toolName) {
             case 'august__bash': {
@@ -510,7 +510,7 @@ async function executeAugustToolCall(toolName, args) {
                 // ── Confirmation gate ──
                 // The AI must first call with confirmed=false (or omitted) to surface
                 // the command to the user. Only executes when confirmed=true.
-                if (!args.confirmed) {
+                if (!bypassConfirmation && !args.confirmed) {
                     return `[August Confirmation Required]\n` +
                            `The AI wants to run the following PowerShell command on your machine:\n\n` +
                            `  ${args.command}\n\n` +
@@ -526,7 +526,8 @@ async function executeAugustToolCall(toolName, args) {
             }
 
             case 'august__read_file': {
-                const readPath = path.resolve(args.path);
+                const { resolveAnyPath, toDisplayPath } = require('./workbench');
+                const readPath = resolveAnyPath(args.path);
 
                 // ── Permission check ──
                 const pathViolation = checkPathPermission(readPath);
@@ -535,22 +536,30 @@ async function executeAugustToolCall(toolName, args) {
                 if (!fs.existsSync(readPath)) {
                     throw new Error(`File not found: ${readPath}`);
                 }
-                return fs.readFileSync(readPath, 'utf8');
+                const maxChars = Math.max(1000, Math.min(80000, Number(args.max_chars || 20000)));
+                const text = fs.readFileSync(readPath, 'utf8');
+                return {
+                    path: toDisplayPath(readPath),
+                    length: text.length,
+                    truncated: text.length > maxChars,
+                    content: text.slice(0, maxChars)
+                };
             }
 
             case 'august__write_file': {
-                const writePath = path.resolve(args.path);
+                const { resolveAnyPath, toDisplayPath } = require('./workbench');
+                const writePath = resolveAnyPath(args.path);
 
                 // ── Permission check ──
                 const pathViolation = checkPathPermission(writePath);
                 if (pathViolation) return pathViolation;
 
                 // ── Confirmation gate ──
-                if (!args.confirmed) {
+                if (!bypassConfirmation && !args.confirmed) {
                     return `[August Confirmation Required]\n` +
                            `The AI wants to write a file to the following path:\n\n` +
                            `  ${writePath}\n\n` +
-                           `Content preview (first 300 chars):\n${String(args.content).slice(0, 300)}${args.content.length > 300 ? '\n...(truncated)' : ''}\n\n` +
+                           `Content preview (first 300 chars):\n${String(args.content || '').slice(0, 300)}${String(args.content || '').length > 300 ? '\n...(truncated)' : ''}\n\n` +
                            `To approve, call this tool again with the same arguments and confirmed=true.\n` +
                            `To write to a different path, specify a new path and confirmed=true.\n` +
                            `To cancel, tell me to stop.`;
@@ -559,8 +568,12 @@ async function executeAugustToolCall(toolName, args) {
                 if (!fs.existsSync(dir)) {
                     fs.mkdirSync(dir, { recursive: true });
                 }
-                fs.writeFileSync(writePath, args.content, 'utf8');
-                return `Successfully wrote to ${writePath}`;
+                fs.writeFileSync(writePath, String(args.content || ''), 'utf8');
+                return {
+                    status: 'written',
+                    path: toDisplayPath(writePath),
+                    bytes: Buffer.byteLength(String(args.content || ''), 'utf8')
+                };
             }
 
             case 'august__core_memory_append':
@@ -1114,7 +1127,7 @@ async function executeAugustToolCall(toolName, args) {
             }
 
             case 'august__import_skill': {
-                if (!args.confirmed) {
+                if (!bypassConfirmation && !args.confirmed) {
                     return `[August Confirmation Required]\n` +
                            `The AI wants to import and save a proxy skill/capability from:\n\n` +
                            `  ${args.url || '(missing url)'}\n\n` +

@@ -23,6 +23,33 @@ const {
 } = require('./agent-registry');
 
 const sessions = new Map();
+const WORKBENCH_SESSIONS_FILE = path.join(__dirname, '..', 'august_workbench_sessions.json');
+
+function loadSessions() {
+    if (sessions.size > 0) return;
+    try {
+        if (fs.existsSync(WORKBENCH_SESSIONS_FILE)) {
+            const data = JSON.parse(fs.readFileSync(WORKBENCH_SESSIONS_FILE, 'utf8'));
+            for (const session of data.sessions || []) {
+                sessions.set(session.id, session);
+            }
+        }
+    } catch (e) {
+        console.warn('Failed to load workbench sessions:', e.message);
+    }
+}
+
+function saveSessions() {
+    try {
+        const all = Array.from(sessions.values());
+        all.sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime());
+        // keep last 50
+        const toSave = all.slice(-50);
+        fs.writeFileSync(WORKBENCH_SESSIONS_FILE, JSON.stringify({ sessions: toSave }));
+    } catch (e) {
+        console.warn('Failed to save workbench sessions:', e.message);
+    }
+}
 const WORKSPACE_ROOT = path.resolve(__dirname, '..');
 const PROJECT_ROOT = path.resolve(WORKSPACE_ROOT, '..');
 const CONTAINER_PROJECT_ROOT = path.resolve(process.env.CLAUDISH_PROXY_CONTAINER_ROOT || PROJECT_ROOT);
@@ -98,19 +125,31 @@ function createWorkbenchSession({ provider = 'claude', agentId = 'build' } = {})
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
     };
+    loadSessions();
     sessions.set(session.id, session);
+    saveSessions();
     return summarizeSession(session);
 }
 
 function getWorkbenchSession(id) {
+    loadSessions();
     if (id && sessions.has(id)) return sessions.get(id);
-    return sessions.get(createWorkbenchSession().id);
+    const newSession = createWorkbenchSession();
+    return sessions.get(newSession.id);
+}
+
+function listWorkbenchSessions() {
+    loadSessions();
+    const all = Array.from(sessions.values());
+    all.sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime());
+    return all.map(summarizeSession);
 }
 
 function summarizeSession(session) {
     const agent = getAgent(session.agentId || 'build');
     return {
         id: session.id,
+        title: session.title,
         provider: session.provider,
         agentId: agent.id,
         agentRole: agent.role,
@@ -161,6 +200,7 @@ function setWorkbenchGoal(session, condition) {
         lastMet: false
     };
     session.updatedAt = now;
+    saveSessions();
     return summarizeGoal(session.goal);
 }
 
@@ -174,6 +214,7 @@ function clearWorkbenchGoal(session, reason = 'cleared') {
     session.lastGoal = session.goal;
     session.goal = null;
     session.updatedAt = now;
+    saveSessions();
     return summarizeGoal(session.lastGoal);
 }
 
@@ -226,7 +267,7 @@ function isProxyMutation(toolName, args) {
     for (const arg of pathArgs) {
         if (args[arg] && isProxyPath(args[arg])) return true;
     }
-    if (toolName === 'august__bash' || toolName === 'workbench_run_command') {
+    if (toolName === 'august__bash' || toolName === 'august__run_command') {
         const cmd = String(args.command || '').toLowerCase();
         const normalizedRoot = PROXY_ROOT.toLowerCase().replace(/\\/g, '/');
         if (cmd.includes(normalizedRoot)) return true;
@@ -241,9 +282,9 @@ function isProxyMutation(toolName, args) {
 }
 
 const MUTATING_WORKBENCH_TOOLS = new Set([
-    'workbench_write_file',
-    'workbench_replace_text',
-    'workbench_run_command',
+    'august__write_file',
+    'august__replace_text',
+    'august__run_command',
     'august__write_file',
     'august__bash',
     'august__spawn_background_task',
@@ -251,7 +292,7 @@ const MUTATING_WORKBENCH_TOOLS = new Set([
     'august__forget',
     'august__learn_subagent',
     'august__import_skill',
-    'workbench_import_skill',
+    'august__import_skill',
     'computer_mouse_click',
     'computer_mouse_double_click',
     'computer_mouse_right_click',
@@ -274,14 +315,17 @@ const SAFE_COMPUTER_TOOLS = new Set([
 ]);
 
 function isMutatingWorkbenchTool(toolName, args) {
-    if (MUTATING_WORKBENCH_TOOLS.has(toolName)) return true;
-    if (toolName?.startsWith('computer_')) return !SAFE_COMPUTER_TOOLS.has(toolName);
-    if (isProxyMutation(toolName, args || {})) return true;
-    if (toolName?.startsWith('mcp__filesystem__')) {
-        return /write|edit|create|move|rename|delete|remove/i.test(toolName);
+    const normalized = (typeof toolName === 'string' && toolName.startsWith('workbench_'))
+        ? toolName.replace('workbench_', 'august__')
+        : toolName;
+    if (MUTATING_WORKBENCH_TOOLS.has(normalized)) return true;
+    if (normalized?.startsWith('computer_')) return !SAFE_COMPUTER_TOOLS.has(normalized);
+    if (isProxyMutation(normalized, args || {})) return true;
+    if (normalized?.startsWith('mcp__filesystem__')) {
+        return /write|edit|create|move|rename|delete|remove/i.test(normalized);
     }
-    if (toolName?.startsWith('mcp__')) {
-        return /write|edit|create|move|rename|delete|remove|install|import|save|set|update|add|forget|remember/i.test(toolName);
+    if (normalized?.startsWith('mcp__')) {
+        return /write|edit|create|move|rename|delete|remove|install|import|save|set|update|add|forget|remember/i.test(normalized);
     }
     return false;
 }
@@ -297,7 +341,7 @@ function openAiToAnthropicTool(openAiTool) {
 function getAllTools() {
     const coreWorkbenchTools = [
         {
-            name: 'workbench_list_directory',
+            name: 'august__list_directory',
             description: 'List files and folders anywhere on the filesystem.',
             input_schema: {
                 type: 'object',
@@ -307,19 +351,7 @@ function getAllTools() {
             }
         },
         {
-            name: 'workbench_read_file',
-            description: 'Read any text file anywhere on the filesystem.',
-            input_schema: {
-                type: 'object',
-                properties: {
-                    path: { type: 'string' },
-                    max_chars: { type: 'number', description: 'Maximum characters to return. Defaults to 20000.' }
-                },
-                required: ['path']
-            }
-        },
-        {
-            name: 'workbench_search_files',
+            name: 'august__search_files',
             description: 'Search text files for a query anywhere on the filesystem.',
             input_schema: {
                 type: 'object',
@@ -332,7 +364,7 @@ function getAllTools() {
             }
         },
         {
-            name: 'workbench_diagnose_proxy',
+            name: 'august__diagnose_proxy',
             description: 'Run a non-mutating self-diagnostic for the proxy, August Brain, vector DB, semantic memory, Supermemory configuration, providers, MCP, and recent activity.',
             input_schema: {
                 type: 'object',
@@ -342,7 +374,7 @@ function getAllTools() {
             }
         },
         {
-            name: 'workbench_describe_environment',
+            name: 'august__describe_environment',
             description: 'Describe the Workbench runtime roots, host-to-container path mappings, provider mode, approval state, and recent mutation audit without changing anything.',
             input_schema: {
                 type: 'object',
@@ -350,7 +382,7 @@ function getAllTools() {
             }
         },
         {
-            name: 'workbench_list_proxy_capabilities',
+            name: 'august__list_proxy_capabilities',
             description: 'List every tool and capability currently exposed to AI Workbench, grouped by source.',
             input_schema: {
                 type: 'object',
@@ -358,7 +390,7 @@ function getAllTools() {
             }
         },
         {
-            name: 'workbench_list_agent_registry',
+            name: 'august__list_agent_registry',
             description: 'List the Workbench agent registry, default roles, and parent-to-child inherited permissions.',
             input_schema: {
                 type: 'object',
@@ -368,7 +400,7 @@ function getAllTools() {
             }
         },
         {
-            name: 'workbench_get_activity',
+            name: 'august__get_activity',
             description: 'Read recent proxy activity, pending requests, and request stats without mutating anything.',
             input_schema: {
                 type: 'object',
@@ -378,7 +410,7 @@ function getAllTools() {
             }
         },
         {
-            name: 'workbench_submit_plan',
+            name: 'august__submit_plan',
             description: 'Submit an implementation plan for user review. Required BEFORE any mutation anywhere on the system.',
             input_schema: {
                 type: 'object',
@@ -393,58 +425,7 @@ function getAllTools() {
             }
         },
         {
-            name: 'workbench_find_skill_sources',
-            description: 'Search for importable skills/capabilities from GitHub or preview a direct GitHub/raw/http URL. This is read-only; use it before importing skills from the internet.',
-            input_schema: {
-                type: 'object',
-                properties: {
-                    query: { type: 'string', description: 'Skill topic, capability name, or direct public URL.' },
-                    url: { type: 'string', description: 'Direct GitHub/raw/http URL to resolve instead of searching.' },
-                    limit: { type: 'number', description: 'Maximum GitHub candidates. Defaults to 5.' },
-                    verify: { type: 'boolean', description: 'When true, preview the first one or two candidates. Defaults to false.' },
-                    enable_mcp: { type: 'boolean', description: 'Preview imported MCP servers as enabled. Defaults to false.' }
-                }
-            }
-        },
-        {
-            name: 'workbench_preview_skill_import',
-            description: 'Preview what a GitHub/raw/http capability link would save as skills, MCP servers, and plugins. This does not write anything.',
-            input_schema: {
-                type: 'object',
-                properties: {
-                    url: { type: 'string', description: 'GitHub repo/blob, raw URL, plugin manifest, MCP config, package metadata, pyproject.toml, or SKILL.md URL.' },
-                    enable_mcp: { type: 'boolean', description: 'Preview imported MCP servers as enabled. Defaults to false.' }
-                },
-                required: ['url']
-            }
-        },
-        {
-            name: 'workbench_import_skill',
-            description: 'Import and save a skill/capability from a GitHub/raw/http link into the global August skill catalog. Requires an approved plan first. Saved skills become available to Workbench, Claude Code, Hermes, Codex, and other proxy clients on the next request.',
-            input_schema: {
-                type: 'object',
-                properties: {
-                    url: { type: 'string', description: 'GitHub repo/blob, raw URL, plugin manifest, MCP config, package metadata, pyproject.toml, or SKILL.md URL.' },
-                    enable_mcp: { type: 'boolean', description: 'Enable imported MCP servers immediately. Defaults to false for safety.' },
-                    restart_mcp: { type: 'boolean', description: 'Restart MCP servers after enabling imported MCP servers. Defaults to true.' }
-                },
-                required: ['url']
-            }
-        },
-        {
-            name: 'workbench_write_file',
-            description: 'Write a complete file anywhere on the filesystem. Requires an approved plan first.',
-            input_schema: {
-                type: 'object',
-                properties: {
-                    path: { type: 'string' },
-                    content: { type: 'string' }
-                },
-                required: ['path', 'content']
-            }
-        },
-        {
-            name: 'workbench_replace_text',
+            name: 'august__replace_text',
             description: 'Replace exact text inside any file. Requires an approved plan first.',
             input_schema: {
                 type: 'object',
@@ -457,7 +438,7 @@ function getAllTools() {
             }
         },
         {
-            name: 'workbench_run_command',
+            name: 'august__run_command',
             description: 'Run a PowerShell command in the workspace root. Requires an approved plan first.',
             input_schema: {
                 type: 'object',
@@ -469,7 +450,7 @@ function getAllTools() {
             }
         },
         {
-            name: 'workbench_spawn_subagent',
+            name: 'august__spawn_subagent',
             description: 'Spawn a focused sub-agent to complete a specific task independently. Choose explore for read-only codebase questions, plan for architecture/planning, or general for bounded research. The child inherits the parent agent permissions and approval policy.',
             input_schema: {
                 type: 'object',
@@ -479,6 +460,15 @@ function getAllTools() {
                     task: { type: 'string', description: 'The specific task for the sub-agent to complete. Be precise about what to do and what to report back.' }
                 },
                 required: ['task']
+            }
+        },
+        {
+            name: 'august__generate_session_title',
+            description: 'Generate an AI title for the current workbench session based on its first user message. Use when the session title is empty or a more meaningful title is needed.',
+            input_schema: {
+                type: 'object',
+                properties: {},
+                required: []
             }
         }
     ];
@@ -526,7 +516,7 @@ function requireApproval(session, toolName, args) {
     if (session.plan && session.approved) return null;
     return {
         blocked: true,
-        message: 'WORKBENCH APPROVAL GATE - This operation can update files, run commands, change memory, control the host desktop, or otherwise change system state. Create a plan with workbench_submit_plan and wait for the user to approve it in the Workbench UI or August terminal /approve, then retry.',
+        message: 'WORKBENCH APPROVAL GATE - This operation can update files, run commands, change memory, control the host desktop, or otherwise change system state. Create a plan with august__submit_plan and wait for the user to approve it in the Workbench UI or August terminal /approve, then retry.',
         detail: `Tool: ${toolName} | Arguments: ${JSON.stringify(args)}`
     };
 }
@@ -629,6 +619,8 @@ function submitPlan(session, args) {
         plan: session.plan,
         hardRule: 'Do not write files or run commands until the user approves this plan in the Workbench UI or August terminal /approve.'
     };
+    saveSessions();
+    return result;
 }
 
 function writeFile(args) {
@@ -683,13 +675,35 @@ function listProxyCapabilities() {
     const tools = getAllTools();
     const groups = {};
     for (const tool of tools) {
-        const group = groupToolName(tool.name);
+        const name = tool.name;
+        const group = groupToolName(name);
         if (!groups[group]) groups[group] = [];
         groups[group].push({
-            name: tool.name,
-            mutating: isMutatingWorkbenchTool(tool.name, {}),
+            name: name,
+            mutating: isMutatingWorkbenchTool(name, {}),
             description: tool.description || ''
         });
+
+        // Expose workbench_ aliases in capabilities for backwards compatibility
+        if (name.startsWith('august__')) {
+            const baseName = name.slice(8);
+            const isCoreWorkbench = [
+                'list_directory', 'search_files', 'diagnose_proxy', 'describe_environment',
+                'list_proxy_capabilities', 'list_agent_registry', 'get_activity', 'submit_plan',
+                'replace_text', 'run_command', 'spawn_subagent', 'read_file', 'write_file',
+                'find_skill_sources', 'preview_skill_import', 'import_skill'
+            ].includes(baseName);
+            
+            if (isCoreWorkbench) {
+                const wbName = 'workbench_' + baseName;
+                if (!groups['workbench']) groups['workbench'] = [];
+                groups['workbench'].push({
+                    name: wbName,
+                    mutating: isMutatingWorkbenchTool(wbName, {}),
+                    description: tool.description || ''
+                });
+            }
+        }
     }
     return {
         generatedAt: new Date().toISOString(),
@@ -944,38 +958,29 @@ async function executeWorkbenchTool(session, toolUse, toolContext = {}) {
 
     let result;
     try {
-        if (name === 'workbench_list_directory') result = listDirectory(args);
-        else if (name === 'workbench_read_file') result = readFile(args);
-        else if (name === 'workbench_search_files') result = searchFiles(args);
-        else if (name === 'workbench_diagnose_proxy') result = diagnoseProxy(args);
-        else if (name === 'workbench_describe_environment') result = describeWorkbenchEnvironment(session);
-        else if (name === 'workbench_list_proxy_capabilities') result = listProxyCapabilities();
-        else if (name === 'workbench_list_agent_registry') result = listAgentRegistry(args.parent_agent_id || session?.agentId || 'build');
-        else if (name === 'workbench_get_activity') result = getWorkbenchActivity(args);
-        else if (name === 'workbench_submit_plan') result = submitPlan(session, args);
-        else if (name === 'workbench_find_skill_sources') result = await findSkillSources({
-            query: args.query,
-            url: args.url,
-            limit: args.limit,
-            verify: args.verify === true,
-            enableMcp: args.enable_mcp === true
-        });
-        else if (name === 'workbench_preview_skill_import') result = await previewSkillImport({
-            url: args.url,
-            enableMcp: args.enable_mcp === true
-        });
-        else if (name === 'workbench_import_skill') result = await importSkillFromLink({
-            url: args.url,
-            enableMcp: args.enable_mcp === true,
-            restartMcp: args.restart_mcp !== false
-        });
-        else if (name === 'workbench_write_file') result = writeFile(args);
-        else if (name === 'workbench_replace_text') result = replaceText(args);
-        else if (name === 'workbench_run_command') result = await runCommand(args);
-        else if (name === 'workbench_spawn_subagent') result = await executeSubAgent(session, args);
+        if (name === 'august__list_directory' || name === 'workbench_list_directory') result = listDirectory(args);
+        else if (name === 'august__search_files' || name === 'workbench_search_files') result = searchFiles(args);
+        else if (name === 'august__diagnose_proxy' || name === 'workbench_diagnose_proxy') result = diagnoseProxy(args);
+        else if (name === 'august__describe_environment' || name === 'workbench_describe_environment') result = describeWorkbenchEnvironment(session);
+        else if (name === 'august__list_proxy_capabilities' || name === 'workbench_list_proxy_capabilities') result = listProxyCapabilities();
+        else if (name === 'august__list_agent_registry' || name === 'workbench_list_agent_registry') result = listAgentRegistry(args.parent_agent_id || session?.agentId || 'build');
+        else if (name === 'august__get_activity' || name === 'workbench_get_activity') result = getWorkbenchActivity(args);
+        else if (name === 'august__submit_plan' || name === 'workbench_submit_plan') result = submitPlan(session, args);
+        else if (name === 'august__replace_text' || name === 'workbench_replace_text') result = replaceText(args);
+        else if (name === 'august__run_command' || name === 'workbench_run_command') result = await runCommand(args);
+        else if (name === 'august__spawn_subagent' || name === 'workbench_spawn_subagent') result = await executeSubAgent(session, args);
+        else if (name === 'august__generate_session_title') {
+            const firstUserMsg = session.messages?.find(m => m.role === 'user');
+            if (!firstUserMsg) throw new Error('No user messages to generate a title from.');
+            await generateSessionTitle(session, firstUserMsg.content, null);
+            result = { title: session.title || '' };
+        }
         else if (name.startsWith('computer_')) result = await hostAgent.execute(name, args);
         else if (isMcpToolName(name)) result = await executeMcpToolCall(name, args);
-        else if (isAugustToolName(name)) result = await executeAugustToolCall(name, args);
+        else if (isAugustToolName(name)) result = await executeAugustToolCall(name, args, true);
+        else if (name.startsWith('workbench_') && isAugustToolName(name.replace('workbench_', 'august__'))) {
+            result = await executeAugustToolCall(name.replace('workbench_', 'august__'), args, true);
+        }
         else if (isCoworkToolName(name)) result = await executeCoworkToolCall(name, args);
         else if (isManagedWebToolName(name)) result = await executeManagedWebTool(name, args);
         else throw new Error(`Unsupported workbench tool: ${name}`);
@@ -996,16 +1001,14 @@ function buildSystemPrompt(session) {
     const toolGuide = [
         '',
         '=== AVAILABLE TOOL CATEGORIES ===',
-        '- workbench_*: List/read/search files, inspect proxy health/activity/capabilities, write files, replace text, run commands, submit plans (anywhere on system)',
-        '- workbench_list_agent_registry / workbench_spawn_subagent: Inspect agent roles or delegate focused subtasks with parent permission inheritance',
-        '- august__*: Shell execution (august__bash), file I/O, semantic memory (remember/recall/list/forget), specialists, supermemory, background tasks, sub-agents (spawn_subagent, learn_subagent)',
+        '- august__*: List/read/search/write files, run commands, inspect proxy health/capabilities, semantic memory, specialists, supermemory, sub-agents, skills, plans (anywhere on system)',
         '- mcp__*: All tools from connected MCP servers (filesystem, minimax, fetch, custom servers)',
         '- WebSearch / WebFetch: Public web search and page fetching',
-        '- workbench_find_skill_sources / workbench_preview_skill_import / workbench_import_skill: Discover, inspect, and save internet/GitHub skills into the shared proxy skill catalog',
+        '- august__find_skill_sources / august__preview_skill_import / august__import_skill: Discover, inspect, and save internet/GitHub skills into the shared proxy skill catalog',
         '- mcp__cowork__*: Cowork compatibility tools (directory access, skills, plugins, import capability links)',
         '- computer_*: Host desktop control — screenshot, mouse (move/click/scroll), keyboard (type/key), window list/focus, app launch, visible browser',
-        'When the user asks what is wrong with the proxy, brain, tools, memory, or runtime, call workbench_diagnose_proxy before guessing.',
-        'When path mapping, mounted roots, provider mode, approval state, or recent mutations matter, call workbench_describe_environment before guessing.',
+        'When the user asks what is wrong with the proxy, brain, tools, memory, or runtime, call august__diagnose_proxy before guessing.',
+        'When path mapping, mounted roots, provider mode, approval state, or recent mutations matter, call august__describe_environment before guessing.',
         'Keep responses concise and report what you did or found.'
     ].join('\n');
 
@@ -1024,7 +1027,7 @@ function buildSystemPrompt(session) {
         '=== HARD RULE: PLAN APPROVAL BEFORE MUTATION ===',
         'You can freely read files, search files, inspect directories, search/fetch the web, and use non-mutating discovery tools.',
         'When the user asks you to fetch or add a skill from GitHub or the internet, search or preview first. Then submit a concrete plan and wait for approval before importing.',
-        'Any mutation anywhere on the system requires an explicit approved plan via workbench_submit_plan and user approval in the Workbench UI.',
+        'Any mutation anywhere on the system requires an explicit approved plan via august__submit_plan and user approval in the Workbench UI.',
         'A mutation means writing/editing/deleting/moving/creating files, running shell commands, changing memory, installing/importing/updating resources, launching background tasks, or using host computer controls that click/type/focus/launch/close/set clipboard.',
         'If a mutating tool is attempted without approval, the server will cancel it and return the approval-gate reminder.',
         'The proxy system directory is: ' + PROXY_ROOT,
@@ -1829,6 +1832,10 @@ async function sendWorkbenchMessageStream({ sessionId, message, provider, agentI
     session.messages.push({ role: 'user', content: text });
     session.updatedAt = new Date().toISOString();
 
+    if (session.messages.filter(m => m.role === 'user').length === 1 && !session.title) {
+        generateSessionTitle(session, text, emit).catch(e => console.warn('[Workbench] title gen err:', e.message));
+    }
+
     await callWorkbenchModelStream(session, emit);
     await continueGoalUntilReached(session, emit);
 
@@ -1842,6 +1849,7 @@ async function sendWorkbenchMessageStream({ sessionId, message, provider, agentI
         }
     } catch (_) {}
 
+    saveSessions();
     safeEmit(emit, 'session', summarizeSession(session));
 }
 
@@ -1851,12 +1859,87 @@ function approveWorkbenchPlan(sessionId) {
     session.approved = true;
     session.approvedAt = new Date().toISOString();
     session.updatedAt = session.approvedAt;
+    saveSessions();
     return summarizeSession(session);
 }
 
 function resetWorkbenchSession(sessionId, provider, agentId = 'build') {
-    if (sessionId) sessions.delete(sessionId);
+    if (sessionId) {
+        sessions.delete(sessionId);
+        saveSessions();
+    }
     return createWorkbenchSession({ provider, agentId });
+}
+
+function deleteWorkbenchSession(sessionId) {
+    if (sessionId && sessions.has(sessionId)) {
+        sessions.delete(sessionId);
+        saveSessions();
+        return true;
+    }
+    return false;
+}
+
+async function generateSessionTitle(session, firstMessage, emit) {
+    try {
+        const profile = getProfile(session.provider === 'codex' ? 'codex' : 'claude') || getProfile('claude') || {};
+        if (!profile.targetUrl || !profile.apiKey) return;
+        const prompt = `Summarize this request as a short title:\n\n<request>${firstMessage}</request>\n\nOutput only the title, nothing else, no quotes.`;
+        
+        const isCodex = session.provider === 'codex';
+        let body = {};
+        if (isCodex) {
+            body = {
+                model: profile._upstreamModel || profile.currentModel || 'gpt-4o-mini',
+                messages: [{ role: 'user', content: prompt }],
+                temperature: 0.3,
+                max_tokens: 300
+            };
+        } else {
+            body = {
+                model: profile._upstreamModel || profile.currentModel || 'claude-3-haiku-20240307',
+                messages: [{ role: 'user', content: prompt }],
+                temperature: 0.3,
+                max_tokens: 300
+            };
+        }
+        
+        const headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${profile.apiKey}`
+        };
+        if (!isCodex) {
+            headers['x-api-key'] = profile.apiKey;
+            headers['anthropic-version'] = '2023-06-01';
+        }
+        
+        const fetchFn = typeof fetch !== 'undefined' ? fetch : require('node-fetch');
+        const res = await fetchFn(profile.targetUrl, { method: 'POST', headers, body: JSON.stringify(body) });
+        if (!res.ok) return;
+        const data = await res.json();
+        let title = '';
+        if (isCodex && data.choices && data.choices[0]?.message?.content) {
+            title = data.choices[0].message.content.trim();
+        } else if (!isCodex && data.content && Array.isArray(data.content)) {
+            for (const block of data.content) {
+                if (block.text) { title = block.text.trim(); break; }
+            }
+            if (!title) {
+                for (const block of data.content) {
+                    if (block.thinking) { title = block.thinking.trim(); break; }
+                }
+            }
+        }
+        if (title) {
+            session.title = title.replace(/^["']|["']$/g, '');
+            saveSessions();
+            if (emit) {
+                safeEmit(emit, 'session', summarizeSession(session));
+            }
+        }
+    } catch(e) {
+        console.warn('[Workbench] Failed to generate session title:', e.message);
+    }
 }
 
 module.exports = {
@@ -1865,12 +1948,17 @@ module.exports = {
     approveWorkbenchPlan,
     clearWorkbenchGoal,
     createWorkbenchSession,
+    deleteWorkbenchSession,
     executeWorkbenchTool,
+    generateSessionTitle,
     getWorkbenchGoalStatus,
     getWorkbenchSession,
+    listWorkbenchSessions,
     listAgentRegistry,
     listProxyCapabilities,
     resetWorkbenchSession,
+    resolveAnyPath,
+    toDisplayPath,
     sendWorkbenchMessage,
     sendWorkbenchMessageStream,
     setWorkbenchGoal,

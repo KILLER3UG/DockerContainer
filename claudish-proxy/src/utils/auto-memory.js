@@ -135,6 +135,7 @@ function fallbackExtraction(textOnlyMessages, assistantText, reason) {
             topic,
             summary: summary || `Auto-memory fallback checkpoint because extraction failed: ${reason || 'unknown'}`
         },
+        semantic_facts: [],
         _fallbackReason: reason || 'provider unavailable'
     };
 }
@@ -242,26 +243,52 @@ async function extractAndSaveMemories(userMessages, assistantContent, cfg, upstr
 
         console.log(`[Auto-Memory] Starting extraction... (${textOnlyMessages.length} user msgs, ${assistantText.length} chars assistant text, model=${upstreamModel})`);
 
-        const systemPrompt = `You are a background Memory Extractor for a personal AI assistant.
-Your job is to read the latest user message and extract:
-1. Long-term, persistent facts about the user, their projects, their tech stack, or their preferences. Ignore temporary chatter or coding bugs. Only extract things that will be true next week.
-2. A very brief summary of what the user is currently working on or talking about in this conversation turn, to serve as a checkpoint so the AI remembers the ongoing topic.
+        // Retrieve current semantic facts to inject in the prompt for deduplication
+        const semanticFactsText = semanticMemory.getAllFacts()
+            .map(f => `- ${f.key} (${f.category}): ${f.value}`)
+            .join('\n');
 
-CURRENT MEMORY:
+        const systemPrompt = `You are a background Memory Extractor for a personal AI assistant.
+Your job is to read the latest user message and the assistant response and extract:
+1. Core Memory Facts: Long-term, persistent facts about the user, their projects, their tech stack, or their preferences.
+2. Semantic Facts: Structured key-value properties describing user preferences, details, projects, or workflow rules.
+3. Conversation Checkpoint: A brief summary of what is happening in this conversation turn.
+
+CURRENT CORE MEMORY:
 ${currentContext}
 
-If the user says something that contradicts the current memory facts, you must delete the old fact and add the new one.
-If no persistent facts are found, return empty arrays for add_facts and delete_facts.
-For conversation_summary, always provide a 1-sentence summary of the current topic, unless it's just a greeting.
+CURRENT SEMANTIC MEMORY:
+${semanticFactsText || 'None recorded yet.'}
+
+GUIDELINES FOR CORE & SEMANTIC FACTS:
+- Only extract long-term, durable facts that will remain true next week (e.g. tech stack, preferences, project architecture, connected devices).
+- DO NOT extract transient debugging info, line numbers, temporary variables, terminal command lines, package versions, or compilation error messages. Route active task context *exclusively* to the conversation checkpoint.
+- Perform semantic deduplication: if a fact is already represented in either CURRENT CORE MEMORY or CURRENT SEMANTIC MEMORY (even if phrased differently), DO NOT extract it.
+- If the user contradicts a current fact, specify the old fact in "delete_facts" and the new fact in "add_facts".
+- If no new facts are found, return empty arrays.
+- Category for semantic facts must be one of: 'user_preference', 'user_detail', 'project_info', 'workflow_rule', 'session_temp'.
+- For semantic facts, key must be a snake_case string (e.g. 'local_build_preference').
+
+GUIDELINES FOR CONVERSATION CHECKPOINT:
+- Always provide a 1-sentence summary of the current topic (unless it's just a greeting).
+- Topic should be 2-5 words.
+- Summary should be a high-level description of what the user is working on or discussing.
 
 Respond ONLY with valid JSON in this exact format:
 {
-  "add_facts": ["The user prefers dark mode", "The user works on an app called ClaudishProxy"],
-  "delete_facts": ["The user prefers light mode"],
+  "add_facts": ["The user works on claudish-proxy project."],
+  "delete_facts": ["The user works on hermes-desktop project."],
   "conversation_summary": {
-    "topic": "Claudish Proxy Bug Fix",
-    "summary": "User is fixing background memory extraction logic in auto-memory.js."
-  }
+    "topic": "Refactoring Memory System",
+    "summary": "User is combining redundant LLM calls in auto-memory.js into a single unified request."
+  },
+  "semantic_facts": [
+    {
+      "key": "project_claudish_proxy",
+      "value": "Claudish Proxy is a persistent shared brain project.",
+      "category": "project_info"
+    }
+  ]
 }`;
 
         // Determine the best endpoint to use from cfg
@@ -278,7 +305,7 @@ Respond ONLY with valid JSON in this exact format:
             console.log(`[Auto-Memory] Using Anthropic-native format -> ${targetUrl}`);
             const anthropicPayload = {
                 model: upstreamModel || 'claude-sonnet-4-6',
-                max_tokens: 300,
+                max_tokens: 500,
                 temperature: 0.1,
                 system: systemPrompt,
                 messages: [
@@ -408,79 +435,37 @@ Respond ONLY with valid JSON in this exact format:
         if (modified) {
             memory.global_context = updatedContext.trim() || "No cross-session context established.";
             writeAugustCoreMemory(memory);
-            console.log(`[Auto-Memory] ✓ Background extraction successful. Added ${extracted.add_facts?.length || 0} facts, deleted ${extracted.delete_facts?.length || 0} facts, added checkpoint: ${!!extracted.conversation_summary}.`);
+            console.log(`[Auto-Memory] ✓ Background core memory extraction successful. Added ${extracted.add_facts?.length || 0} facts, deleted ${extracted.delete_facts?.length || 0} facts, added checkpoint: ${!!extracted.conversation_summary}.`);
         } else {
-            console.log('[Auto-Memory] No new persistent facts found in this turn.');
+            console.log('[Auto-Memory] No new persistent core facts found in this turn.');
         }
 
-        // ── Semantic memory extraction pass ──
-        try {
-            const lastUserText = textOnlyMessages[textOnlyMessages.length - 1]?.content || '';
+        // Save semantic facts from unified payload
+        if (extracted.semantic_facts && Array.isArray(extracted.semantic_facts) && extracted.semantic_facts.length > 0) {
             const sourceId = clientId || 'unknown';
-            const semanticPrompt = `Extract durable semantic facts from this user message. Return ONLY valid JSON array where each item has: {"key": "short_identifier", "value": "fact text", "category": "user_preference|user_detail|project_info|workflow_rule"}. If no facts, return []. Do not include markdown formatting.`;
-            let semTargetUrl = cfg.targetUrl;
-            if (semTargetUrl.includes('/anthropic/v1/messages')) {
-                semTargetUrl = semTargetUrl.replace('/anthropic/v1/messages', semTargetUrl.includes('minimax') ? '/v1/text/chatcompletion_v2' : '/v1/chat/completions');
-            } else if (semTargetUrl.includes('/anthropic') && !semTargetUrl.includes('/chat/completions')) {
-                semTargetUrl = semTargetUrl.replace('/v1/messages', '/v1/chat/completions');
-            }
-
-            const isMiniMaxSem = semTargetUrl.includes('minimax');
-            const semPayload = {
-                model: isMiniMaxSem ? 'MiniMax-M2.7' : (upstreamModel || 'MiniMax-M2.7'),
-                messages: [
-                    { role: 'system', content: semanticPrompt },
-                    { role: 'user', content: lastUserText }
-                ],
-                max_tokens: 500,
-                temperature: 0.1
-            };
-
-            const semHeaders = { 'Content-Type': 'application/json' };
-            if (cfg.apiKey) semHeaders['Authorization'] = `Bearer ${cfg.apiKey}`;
-
-            const semResponse = await fetch(semTargetUrl, {
-                method: 'POST',
-                headers: semHeaders,
-                body: JSON.stringify(semPayload),
-                signal: AbortSignal.timeout(15000)
-            });
-
-            if (semResponse.ok) {
-                const semData = await semResponse.json();
-                if (semData.base_resp && semData.base_resp.status_code !== 0) {
-                    console.log(`[Auto-Memory] Semantic extraction API error: ${semData.base_resp.status_msg}`);
-                } else {
-                    let semText = semData.choices?.[0]?.message?.content || '';
-                    semText = semText.replace(/```json|```/gi, '').trim();
-                    const firstB = semText.indexOf('[');
-                    const lastB = semText.lastIndexOf(']');
-                    if (firstB !== -1 && lastB !== -1) {
-                        semText = semText.slice(firstB, lastB + 1);
-                    }
-                    const semFacts = JSON.parse(semText);
-                    if (Array.isArray(semFacts) && semFacts.length > 0) {
-                        for (const fact of semFacts) {
-                            if (fact.key && fact.value) {
-                                semanticMemory.setFact(
-                                    fact.key,
-                                    fact.value,
-                                    fact.category || 'user_preference',
-                                    null,
-                                    sourceId
-                                );
-                            }
-                        }
-                        console.log(`[Auto-Memory] ✓ Extracted ${semFacts.length} semantic facts (source: ${sourceId})`);
+            let semCount = 0;
+            for (const fact of extracted.semantic_facts) {
+                if (fact.key && fact.value) {
+                    try {
+                        semanticMemory.setFact(
+                            fact.key,
+                            fact.value,
+                            fact.category || 'user_preference',
+                            null,
+                            sourceId
+                        );
+                        semCount++;
+                    } catch (err) {
+                        console.warn(`[Auto-Memory] Failed to save semantic fact ${fact.key}: ${err.message}`);
                     }
                 }
             }
-        } catch (semErr) {
-            console.log(`[Auto-Memory] Semantic extraction skipped: ${semErr.message}`);
+            if (semCount > 0) {
+                console.log(`[Auto-Memory] ✓ Extracted and saved ${semCount} semantic facts (source: ${sourceId})`);
+            }
         }
 
     } catch (e) {
-        // Log with full details so the user can diagnose why extraction is failing
         console.warn('[Auto-Memory] Background extraction failed:', e.message);
         require('fs').appendFileSync(require('path').join(__dirname, 'debug.txt'), new Date().toISOString() + ' ERROR: ' + e.message + '\n' + e.stack + '\n');
     }

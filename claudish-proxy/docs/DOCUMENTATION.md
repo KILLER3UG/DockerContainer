@@ -1435,6 +1435,36 @@ Tool call IDs are encoded using base64url so the same OpenAI `call_xxx` ID alway
 - No ID collision bugs when Claude + Codex run simultaneously
 - Perfect bidirectional translation
 
+### Inline Plan Approval & Execution Gate
+
+To ensure safety and architectural planning before mutation commands are executed, the proxy enforces an **Execution Gate**:
+1. When a task requires making changes (e.g. creating/modifying files or running bash commands), the agent must first submit a plan via `august__submit_plan`.
+2. The plan is rendered as a rich **Interactive Plan Card** directly inside the chat timeline instead of a separate static panel.
+3. The card displays step-by-step tasks, files involved, potential risks, and verification steps.
+4. Mutation tools remain **locked** until the user clicks **Approve Plan** on the card.
+5. Once clicked, the backend updates the session's plan state and registers the approval. An inline quick-action chip **Implement Plan** appears immediately, allowing the user to begin execution with a single click.
+
+### Model Reasoning & Thinking Budget
+
+For models that support native multi-step reasoning (such as Anthropic Claude 3.7 Sonnet or OpenAI's `o1`/`o3-mini`), the proxy exposes configuration parameters in `config.json` and the Web UI:
+- **Thinking Budget & Reasoning Effort**: Persisted inside the profile config as `reasoning_effort` or `thinking_budget`.
+- **API Mapping**: The OpenAI adapter maps this setting to `reasoning_effort` (e.g. `low`, `medium`, `high`), while the Anthropic adapter maps it to `thinking.budget_tokens` in upstream requests.
+- This allows control over model thinking depth, optimizing either latency/cost (low reasoning) or code correctness (high reasoning).
+
+### Persistent Session History
+
+The AI Workbench maintains a full conversation history on the server-side, enabling robust state persistence:
+- **`/ui/workbench/session` Endpoint**: Supports listing past sessions, initiating new sessions, and deleting stale histories.
+- **Side Panel History**: Users can see all past sessions listed in the left sidebar.
+- **Full Re-hydration**: Clicking any historical session re-hydrates the conversation state, message logs, sub-agent activity, and plan approval status.
+
+### FastAPI/Laravel AI Chat Bridge
+
+To serve end-users (such as students) outside developer CLIs, the proxy includes an integrated FastAPI-to-Laravel bridge:
+- **FastAPI Service**: Runs on port `5000` to expose high-performance AI completions.
+- **Laravel Bridge**: Proxies and enforces role permissions via Laravel 11 (`bootstrap/app.php` routing) at `/api/ai/chat`.
+- **AIChatAssistant Component**: A client-side React component that lets students chat with the agent, complete with model variant selection modals supporting specific quantizations (e.g., `Q4_K_M`, `Q5_K_M`, `Q8_0`).
+
 ---
 
 ## Troubleshooting
@@ -1956,15 +1986,17 @@ When a request passes through the `/v1/` routes, the proxy injects its own tools
 **Injection into August's system prompt:** The `<august_subagent_config>` context block is injected alongside `<august_personality>` and `<august_global_context>`. It shows August its current strategy, scores, and how many patterns have been observed — prompting it to call `august__learn_subagent` when appropriate.
 
 #### Hybrid Infinite Memory (`auto-memory.js` & `vector-db.js`)
-At the end of a successful conversation turn, the proxy spawns an asynchronous background LLM call. It parses the interaction (stripping reasoning `<think>` tags) to extract persistent facts and summarize the conversation.
-- **Core Memory (`august_core_memory.json`)**: Stores user profile data, global context, active projects, and recent events.
-- **Infinite Vector DB (`august_infinite_memory.json`)**: Stores semantic embeddings of conversation summaries using cosine similarity. The AI can query this using `august__search_past_conversations`.
+At the end of a successful conversation turn, the proxy triggers an asynchronous background extraction task in `auto-memory.js`. It strips reasoning `<think>` tags and issues a single, unified extraction request to the LLM. This request extracts/updates key facts and provides a comprehensive conversation summary in one step to minimize LLM overhead.
+Memory is persisted in three distinct layers:
+- **Core Memory (`august_core_memory.json`)**: Stores user profile data, global context, active projects, events, and checkpoints.
+- **Semantic Memory (`august_semantic_memory.json`)**: Stores active key-value facts with TTL and confidence scores. These are managed dynamically via memory tools (`august__remember`, `august__forget`, `august__recall`).
+- **Infinite Vector DB (`august_infinite_memory.json`)**: Stores semantic embeddings of past conversation summaries using cosine similarity. The AI can query this using `august__search_past_conversations`.
 
 #### Model Context Protocol (MCP) Integration (`mcp-client.js`)
 The proxy dynamically connects to local MCP servers via stdio. It fetches the available tools from these servers and registers them as native tools (e.g., `mcp__serverName__toolName`), making them instantly available to Claude Code or Codex.
 
 #### The Proxy Execution Gate & Pre-Flight Validation (`validator.js`)
-Before any tool is executed, `validator.js` checks the arguments against the JSON schema. If the schema is invalid, it intercepts the call and injects a `[Validation Error]` with self-healing hints. **Crucially, it acts as an Execution Gate:** It hard-blocks any mutating tools (e.g., `BashTool`, `mcp__filesystem__write_file`) if the AI has not explicitly established or read a `plan.md` in the conversation history. This forces the AI to plan its architecture before writing code.
+Before any tool is executed, `validator.js` checks the arguments against the JSON schema. If the schema is invalid, it intercepts the call and injects a `[Validation Error]` with self-healing hints. **Crucially, it acts as an Execution Gate:** It hard-blocks any mutating tools (e.g., file writes, command execution, or other state-altering tools) if the current Workbench session is `locked`. The AI must submit an implementation plan using `/plan` or `august__submit_plan`, which the user approves inline in the chat timeline or terminal using `/approve`. Once approved, the gate is unlocked for the session, allowing mutations to be executed.
 
 #### Web Search & Local Scraping (`local-web.js`)
 The proxy provides robust local web search capabilities (e.g., via DuckDuckGo HTML scraping) natively, without relying on external API keys. This is exposed to the AI via `web_search` and powers the `/search` and `/fetch` UI endpoints.
@@ -2031,6 +2063,19 @@ claudish-proxy/
 ---
 
 ## Changelog
+
+### 2026-05-19 — Inline Plan Approval, One-Click Execution & Premium TUI
+
+**Inline Plan Approval & One-Click Execution (Workbench):**
+- Propose-Plan operations (`august__submit_plan`) are now intercepted and rendered inline as interactive, high-fidelity plan cards within the chat timeline.
+- Users can approve the plan immediately from the chat thread. Once approved, the card updates to show an "Implement Plan" button/chip, enabling one-click execution without typing the word "implement".
+- System prompt triggers dynamically suggest implementing approved plans, populating user input with a single click.
+
+**Premium August Terminal UI/TUI (Hermes & Opencode inspired):**
+- Upgraded the command line client with rich ASCII branding graphics and dynamic colors matching the active CLI theme.
+- Added a dual-panel welcome panel displaying system status (Session ID, Provider, Agent mode, directory, and endpoint status) side-by-side with capabilities inventory (Total tools, categories, loaded proxy skills, and quick command guides) on launch.
+- Re-architected plan visualization to draw steps, files, risks, and verification sections in clean boxed frames, making reading proposed tasks effortless.
+- Modernized CLI tool execution logs to print with clear icons (⚙/⚠, ✔, ❌), bold labels, and color-coded statuses. Added smart action suggestions to the prompt cycle to guide the user on when to `/approve` or `/build`.
 
 ### 2026-05-16 — Self-Improving Sub-Agent Engine
 

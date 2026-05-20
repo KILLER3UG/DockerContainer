@@ -91,7 +91,7 @@ async function searchGithubSkillSources(query, { limit = 5 } = {}) {
         candidates,
         errors,
         note: candidates.length
-            ? 'Use workbench_preview_skill_import or august__preview_skill_import on a candidate importUrl before saving it.'
+            ? 'Use august__preview_skill_import or august__preview_skill_import on a candidate importUrl before saving it.'
             : 'No GitHub candidates found. Try a direct GitHub/raw/http URL or search with WebSearch first.'
     };
 }
