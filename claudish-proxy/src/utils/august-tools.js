@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const util = require('util');
 const execPromise = util.promisify(exec);
+const readTimestamps = new Map();
 
 const { checkCommandPaths, checkPathPermission, extractPathsFromCommand } = require('./path-permissions');
 const {
@@ -229,6 +230,48 @@ const AUGUST_TOOLS = [
                     }
                 },
                 required: ['path', 'content']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'august__patch',
+            description: 'Patch file(s) using replace mode or V4A patch format. You MUST ask for confirmation before calling this tool with confirmed=true. Always call once without confirmed to preview; the proxy will show a preview/dry-run and prompt the user for approval.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    mode: {
+                        type: 'string',
+                        enum: ['replace', 'patch'],
+                        description: 'Use "replace" for simple single-file search-and-replace, or "patch" for multi-file V4A patch block.'
+                    },
+                    path: {
+                        type: 'string',
+                        description: 'Required if mode is "replace". Absolute or relative path to the file to modify.'
+                    },
+                    old_string: {
+                        type: 'string',
+                        description: 'Required if mode is "replace". The exact snippet of text to find.'
+                    },
+                    new_string: {
+                        type: 'string',
+                        description: 'Required if mode is "replace". The replacement text.'
+                    },
+                    replace_all: {
+                        type: 'boolean',
+                        description: 'If true, replaces all occurrences of old_string. If false, fails if multiple occurrences are found.'
+                    },
+                    patch: {
+                        type: 'string',
+                        description: 'Required if mode is "patch". A complete V4A patch block starting with *** Begin Patch and ending with *** End Patch.'
+                    },
+                    confirmed: {
+                        type: 'boolean',
+                        description: 'Must be true to actually apply the patch. Set to false (or omit) on the first call to run validation and preview; the proxy will ask the user to confirm.'
+                    }
+                },
+                required: ['mode']
             }
         }
     },
@@ -538,6 +581,12 @@ async function executeAugustToolCall(toolName, args, bypassConfirmation = false)
                 }
                 const maxChars = Math.max(1000, Math.min(80000, Number(args.max_chars || 20000)));
                 const text = fs.readFileSync(readPath, 'utf8');
+
+                try {
+                    const stat = fs.statSync(readPath);
+                    readTimestamps.set(readPath, stat.mtimeMs);
+                } catch (e) { /* ignore */ }
+
                 return {
                     path: toDisplayPath(readPath),
                     length: text.length,
@@ -554,26 +603,243 @@ async function executeAugustToolCall(toolName, args, bypassConfirmation = false)
                 const pathViolation = checkPathPermission(writePath);
                 if (pathViolation) return pathViolation;
 
+                // Check staleness
+                let staleWarning = null;
+                const oldMtime = readTimestamps.get(writePath);
+                if (oldMtime !== undefined && fs.existsSync(writePath)) {
+                    const currentMtime = fs.statSync(writePath).mtimeMs;
+                    if (currentMtime !== oldMtime) {
+                        staleWarning = `Warning: ${args.path} was modified since you last read it (external edit or concurrent agent).`;
+                    }
+                }
+
                 // ── Confirmation gate ──
                 if (!bypassConfirmation && !args.confirmed) {
-                    return `[August Confirmation Required]\n` +
+                    let confirmMsg = `[August Confirmation Required]\n` +
                            `The AI wants to write a file to the following path:\n\n` +
-                           `  ${writePath}\n\n` +
-                           `Content preview (first 300 chars):\n${String(args.content || '').slice(0, 300)}${String(args.content || '').length > 300 ? '\n...(truncated)' : ''}\n\n` +
+                           `  ${writePath}\n\n`;
+                    if (staleWarning) {
+                        confirmMsg += `⚠️  ${staleWarning}\n\n`;
+                    }
+                    confirmMsg += `Content preview (first 300 chars):\n${String(args.content || '').slice(0, 300)}${String(args.content || '').length > 300 ? '\n...(truncated)' : ''}\n\n` +
                            `To approve, call this tool again with the same arguments and confirmed=true.\n` +
                            `To write to a different path, specify a new path and confirmed=true.\n` +
                            `To cancel, tell me to stop.`;
+                    return confirmMsg;
                 }
                 const dir = path.dirname(writePath);
                 if (!fs.existsSync(dir)) {
                     fs.mkdirSync(dir, { recursive: true });
                 }
                 fs.writeFileSync(writePath, String(args.content || ''), 'utf8');
-                return {
+
+                try {
+                    const stat = fs.statSync(writePath);
+                    readTimestamps.set(writePath, stat.mtimeMs);
+                } catch (e) { /* ignore */ }
+
+                const result = {
                     status: 'written',
                     path: toDisplayPath(writePath),
                     bytes: Buffer.byteLength(String(args.content || ''), 'utf8')
                 };
+                if (staleWarning) {
+                    result._warning = staleWarning;
+                }
+                return result;
+            }
+
+            case 'august__patch': {
+                const { resolveAnyPath, toDisplayPath } = require('./workbench');
+                const { parseV4APatch, applyV4AOperations } = require('./patch-parser');
+
+                const mode = args.mode;
+
+                // Helper to build list of files affected
+                const affectedPaths = [];
+                if (mode === 'replace') {
+                    if (!args.path) throw new Error("path is required for replace mode");
+                    affectedPaths.push(resolveAnyPath(args.path));
+                } else if (mode === 'patch') {
+                    if (!args.patch) throw new Error("patch is required for patch mode");
+                    const parsed = parseV4APatch(args.patch);
+                    if (parsed.error) {
+                        return { error: parsed.error };
+                    }
+                    for (const op of parsed.operations) {
+                        affectedPaths.push(resolveAnyPath(op.file_path));
+                        if (op.new_path) {
+                            affectedPaths.push(resolveAnyPath(op.new_path));
+                        }
+                    }
+                } else {
+                    throw new Error(`Unknown mode: ${mode}`);
+                }
+
+                // Permission check
+                for (const p of affectedPaths) {
+                    const violation = checkPathPermission(p);
+                    if (violation) return violation;
+                }
+
+                // Check staleness warnings
+                const staleWarnings = [];
+                for (const p of affectedPaths) {
+                    const oldMtime = readTimestamps.get(p);
+                    if (oldMtime !== undefined && fs.existsSync(p)) {
+                        const currentMtime = fs.statSync(p).mtimeMs;
+                        if (currentMtime !== oldMtime) {
+                            staleWarnings.push(`Warning: ${toDisplayPath(p)} was modified since you last read it (external edit or concurrent agent).`);
+                        }
+                    }
+                }
+                const warningMsg = staleWarnings.length > 0 ? staleWarnings.join('\n') : null;
+
+                // File operations interface
+                const fileOps = {
+                    read_file_raw(filePath) {
+                        const p = resolveAnyPath(filePath);
+                        if (!fs.existsSync(p)) return { error: "File not found" };
+                        return { content: fs.readFileSync(p, 'utf8'), error: null };
+                    },
+                    write_file(filePath, content) {
+                        const p = resolveAnyPath(filePath);
+                        const dir = path.dirname(p);
+                        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+                        fs.writeFileSync(p, content, 'utf8');
+                        try {
+                            readTimestamps.set(p, fs.statSync(p).mtimeMs);
+                        } catch (e) { /* ignore */ }
+                        return { error: null };
+                    },
+                    delete_file(filePath) {
+                        const p = resolveAnyPath(filePath);
+                        if (fs.existsSync(p)) {
+                            fs.unlinkSync(p);
+                        }
+                        return { error: null };
+                    },
+                    move_file(filePath, newPath) {
+                        const p = resolveAnyPath(filePath);
+                        const np = resolveAnyPath(newPath);
+                        const dir = path.dirname(np);
+                        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+                        fs.renameSync(p, np);
+                        try {
+                            if (fs.existsSync(np)) {
+                                readTimestamps.set(np, fs.statSync(np).mtimeMs);
+                            }
+                        } catch (e) { /* ignore */ }
+                        return { error: null };
+                    }
+                };
+
+                // If not confirmed, do validation and show preview
+                if (!bypassConfirmation && !args.confirmed) {
+                    if (mode === 'replace') {
+                        const readResult = fileOps.read_file_raw(args.path);
+                        if (readResult.error) {
+                            return `Validation failed:\nFile not found: ${args.path}`;
+                        }
+                        const { fuzzyFindAndReplace } = require('./fuzzy-match');
+                        const [newContent, count, strategy, error] = fuzzyFindAndReplace(
+                            readResult.content, args.old_string, args.new_string, !!args.replace_all
+                        );
+                        if (error) {
+                            const { formatNoMatchHint } = require('./fuzzy-match');
+                            let errMsg = error;
+                            const hint = formatNoMatchHint(error, count, args.old_string, readResult.content);
+                            if (hint) errMsg += hint;
+                            return `Validation failed:\n${errMsg}`;
+                        }
+
+                        let confirmMsg = `[August Confirmation Required]\n` +
+                                         `The AI wants to perform a search-and-replace on ${args.path}:\n\n`;
+                        if (warningMsg) {
+                            confirmMsg += `⚠️  ${warningMsg}\n\n`;
+                        }
+                        confirmMsg += `Find (old_string):\n${args.old_string}\n\n` +
+                                      `Replace (new_string):\n${args.new_string}\n\n` +
+                                      `To approve, call this tool again with the same arguments and confirmed=true.`;
+                        return confirmMsg;
+                    } else {
+                        const parsed = parseV4APatch(args.patch);
+                        if (parsed.error) {
+                            return `Validation failed:\n${parsed.error}`;
+                        }
+                        for (const op of parsed.operations) {
+                            op.file_path = resolveAnyPath(op.file_path);
+                            if (op.new_path) op.new_path = resolveAnyPath(op.new_path);
+                        }
+                        const { validateOperations } = require('./patch-parser');
+                        const valErrors = validateOperations(parsed.operations, fileOps);
+                        if (valErrors.length > 0) {
+                            return `Validation failed:\n` + valErrors.map(e => `  • ${e}`).join('\n');
+                        }
+
+                        let confirmMsg = `[August Confirmation Required]\n` +
+                                         `The AI wants to apply a V4A patch block:\n\n`;
+                        if (warningMsg) {
+                            confirmMsg += `⚠️  ${warningMsg}\n\n`;
+                        }
+                        confirmMsg += `${args.patch}\n\n` +
+                                      `To approve, call this tool again with the same arguments and confirmed=true.`;
+                        return confirmMsg;
+                    }
+                }
+
+                // If confirmed, execute the real patch
+                if (mode === 'replace') {
+                    const readResult = fileOps.read_file_raw(args.path);
+                    if (readResult.error) return { error: readResult.error };
+                    const { fuzzyFindAndReplace } = require('./fuzzy-match');
+                    const [newContent, count, strategy, error] = fuzzyFindAndReplace(
+                        readResult.content, args.old_string, args.new_string, !!args.replace_all
+                    );
+                    if (error) {
+                        const { formatNoMatchHint } = require('./fuzzy-match');
+                        let errMsg = error;
+                        const hint = formatNoMatchHint(error, count, args.old_string, readResult.content);
+                        if (hint) errMsg += hint;
+                        return { error: errMsg };
+                    }
+                    const writeResult = fileOps.write_file(args.path, newContent);
+                    if (writeResult.error) return { error: writeResult.error };
+
+                    const result = {
+                        success: true,
+                        files_modified: [toDisplayPath(resolveAnyPath(args.path))],
+                        diff: `# Updated: ${args.path}`
+                    };
+                    if (warningMsg) result._warning = warningMsg;
+                    return result;
+                } else {
+                    const parsed = parseV4APatch(args.patch);
+                    if (parsed.error) return { error: parsed.error };
+                    for (const op of parsed.operations) {
+                        op.file_path = resolveAnyPath(op.file_path);
+                        if (op.new_path) op.new_path = resolveAnyPath(op.new_path);
+                    }
+                    const applyResult = applyV4AOperations(parsed.operations, fileOps);
+                    if (!applyResult.success) {
+                        return { error: applyResult.error };
+                    }
+                    const result = {
+                        success: true,
+                        files_modified: applyResult.files_modified.map(p => {
+                            if (p.includes(' -> ')) {
+                                const parts = p.split(' -> ');
+                                return `${toDisplayPath(resolveAnyPath(parts[0]))} -> ${toDisplayPath(resolveAnyPath(parts[1]))}`;
+                            }
+                            return toDisplayPath(resolveAnyPath(p));
+                        }),
+                        files_created: applyResult.files_created.map(p => toDisplayPath(resolveAnyPath(p))),
+                        files_deleted: applyResult.files_deleted.map(p => toDisplayPath(resolveAnyPath(p))),
+                        diff: applyResult.diff
+                    };
+                    if (warningMsg) result._warning = warningMsg;
+                    return result;
+                }
             }
 
             case 'august__core_memory_append':
